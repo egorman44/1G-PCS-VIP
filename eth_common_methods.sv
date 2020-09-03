@@ -39,11 +39,12 @@ class eth_common_methods extends uvm_object;
    extern task pcs_synchronization_process();
    extern task pcs_receive_process();
    
-   extern task print_rx_sm_state(rx_sync_sm_st_t rx_sync_sm_st);
+   extern function void print_rx_sm_state(rx_sync_sm_st_t rx_sync_sm_st);
 
 
    extern function boolen_t check_comma(logic [0:6] comma_try);
-
+   extern function bit is_cggood(bit rx_even);   
+   
 endclass // eth_common_methods
 
 function eth_common_methods::new(string name = "eth_common_methods");
@@ -314,166 +315,175 @@ task eth_common_methods::pcs_synchronization_process();
    bit rx_even = '1;
    
    rx_sync_sm_st_t rx_sync_sm_st = LOSS_OF_SYNC_st;
+   
+   forever begin
 
-   fork
+      // According to Figure 36-9-Synchronization SM state transitions occur
+      // only when new PUDI message has been received.
 
-      forever begin
-	 @(rx_sync_sm_st);	 
-	 print_rx_sm_state(rx_sync_sm_st);
-      end
+      @PUDI_e;
       
-      forever begin
+      `uvm_info("ETH_COMMON" , $sformatf("PUDI event has occured"), UVM_FULL);
+      
 
-	 // According to Figure 36-9-Synchronization SM state transitions occur
-	 // only when new PUDI message has been received.
+      // cgbad is not used in synchronization SM(for symplification)just because it's
+      // a negation of cgbad
 
-	 @PUDI_e;
-	 
-	 `uvm_info("ETH_COMMON" , $sformatf("PUDI event has occured"), UVM_FULL);
-	 
+      
+      if(vif.mr_main_reset == 1'b1)
+	rx_sync_sm_st = LOSS_OF_SYNC_st;
+      
+      case(rx_sync_sm_st)
+	
+	LOSS_OF_SYNC_st: begin
+	   sync_status = FALSE;	   
+	   rx_even = ~rx_even;
+	   if(decoder.PUDI_is_comma() && (vif.signal_detect == 1'b1 || vif.mr_loopback == 1'b1))
+	     rx_sync_sm_st = COMMA_DETECT_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
+	
+	COMMA_DETECT_1_st: begin
+	   rx_even = 1'b1;
+	   if(decoder.PUDI_is_data())
+	     rx_sync_sm_st = ACQUIRE_SYNC_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
+	
+	ACQUIRE_SYNC_1_st: begin
+	   rx_even = ~rx_even;
+	   if(rx_even == FALSE && decoder.PUDI_is_comma())
+	     rx_sync_sm_st = COMMA_DETECT_2_st;
+	   else if(!decoder.SUDI_is_invalid() && !decoder.PUDI_is_comma())
+	     rx_sync_sm_st = ACQUIRE_SYNC_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
 
-	 // cgbad is not used in synchronization SM(for symplification)just because it's
-	 // a negation of cgbad
+	COMMA_DETECT_2_st: begin
+	   rx_even = 1'b1;
+	   if(decoder.SUDI_is_data())
+	     rx_sync_sm_st = ACQUIRE_SYNC_2_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
 
-	 
-	 if(vif.mr_main_reset == 1'b1)
-	   rx_sync_sm_st = LOSS_OF_SYNC_st;
-	 
-	 case(rx_sync_sm_st)
+	ACQUIRE_SYNC_2_st: begin
+	   rx_even = ~rx_even;
+
+	   `uvm_info("ETH_COMMON" , $sformatf("is_comma = %0b , is_invalid = %0b" , decoder.PUDI_is_invalid , decoder.PUDI_is_comma) , UVM_FULL)
 	   
-	   LOSS_OF_SYNC_st: begin
-	      sync_status = FALSE;	   
-	      rx_even = ~rx_even;
-	      if(decoder.PUDI_is_comma() && (vif.signal_detect == 1'b1 || vif.mr_loopback == 1'b1))
-		rx_sync_sm_st = COMMA_DETECT_1_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	   if(!rx_even && decoder.PUDI_is_comma())
+	     rx_sync_sm_st = COMMA_DETECT_3_st;
+	   else if(!decoder.PUDI_is_invalid() && !decoder.PUDI_is_comma()) begin	      
+	      rx_sync_sm_st = ACQUIRE_SYNC_2_st;
+	      `uvm_info("ETH_COMMON" , "Next is ACQUIRE_SYNC_2_st" , UVM_FULL)
 	   end
-	   
-	   COMMA_DETECT_1_st: begin
-	      rx_even = EVEN;
-	      if(decoder.PUDI_is_data())
-		rx_sync_sm_st = ACQUIRE_SYNC_1_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	   else begin
+	      rx_sync_sm_st = LOSS_OF_SYNC_st;
+	      `uvm_info("ETH_COMMON" , "Next is LOSS_OF_SYNC_st" , UVM_FULL)
 	   end
-	   
-	   ACQUIRE_SYNC_1_st: begin
-	      rx_even = ~rx_even;
-	      if(rx_even == FALSE && decoder.PUDI_is_comma)
-		rx_sync_sm_st = COMMA_DETECT_2_st;
-	      else if(!decoder.SUDI_is_invalid() && !decoder.PUDI_is_comma())
-		rx_sync_sm_st = ACQUIRE_SYNC_1_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-	   end
+	end
 
-	   COMMA_DETECT_2_st: begin
-	      rx_even = EVEN;
-	      if(decoder.SUDI_is_data())
-		rx_sync_sm_st = ACQUIRE_SYNC_2_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-	   end
+	COMMA_DETECT_3_st: begin
+	   rx_even = 1'b1;
+	   if(decoder.PUDI_is_data())
+	     rx_sync_sm_st = SYNC_ACQUIRED_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
+	
+	SYNC_ACQUIRED_1_st: begin
+	   sync_status = TRUE;
+	   rx_even = ~rx_even;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = SYNC_ACQUIRED_1_st;
+	   else
+	     rx_sync_sm_st = SYNC_ACQUIRED_2_st;
+	end
 
-	   ACQUIRE_SYNC_2_st: begin
-	      rx_even = ~rx_even;
-	      if(rx_even == FALSE && decoder.PUDI_is_comma)
-		rx_sync_sm_st = COMMA_DETECT_3_st;
-	      else if(decoder.PUDI_is_invalid() && decoder.PUDI_is_comma())
-		rx_sync_sm_st = ACQUIRE_SYNC_2_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-	   end
+	SYNC_ACQUIRED_2_st: begin
+	   rx_even = ~rx_even;
+	   good_cgs = 0;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = SYNC_ACQUIRED_2A_st;
+	   else 
+	     rx_sync_sm_st = SYNC_ACQUIRED_3_st;
+	end
 
-	   COMMA_DETECT_3_st: begin
-	      rx_even = TRUE;
-	      if(decoder.PUDI_is_data())
-		rx_sync_sm_st = SYNC_ACQUIRED_1_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;
-	   end
-	   
-	   SYNC_ACQUIRED_1_st: begin
-	      sync_status = TRUE;
-	      rx_even = ~rx_even;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = SYNC_ACQUIRED_1_st;
-	      else
-		rx_sync_sm_st = SYNC_ACQUIRED_2_st;
-	   end
+	SYNC_ACQUIRED_2A_st: begin
+	   rx_even = ~rx_even;
+	   ++good_cgs;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_1_st : SYNC_ACQUIRED_2A_st;
+	   else
+	     rx_sync_sm_st = SYNC_ACQUIRED_3_st;
+	end
 
-	   SYNC_ACQUIRED_2_st: begin
-	      rx_even = ~rx_even;
-	      good_cgs = 0;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = SYNC_ACQUIRED_2A_st;
-	      else 
-		rx_sync_sm_st = SYNC_ACQUIRED_3_st;
-	   end
+	SYNC_ACQUIRED_3_st: begin
+	   rx_even = ~rx_even;
+	   good_cgs = 0;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = SYNC_ACQUIRED_3A_st;
+	   else 
+	     rx_sync_sm_st = SYNC_ACQUIRED_4_st;
+	end
 
-	   SYNC_ACQUIRED_2A_st: begin
-	      rx_even = ~rx_even;
-	      ++good_cgs;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_1_st : SYNC_ACQUIRED_2A_st;
-	      else
-		rx_sync_sm_st = SYNC_ACQUIRED_3_st;
-	   end
+	SYNC_ACQUIRED_3A_st: begin
+	   rx_even = ~rx_even;
+	   ++good_cgs;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_2_st : SYNC_ACQUIRED_3A_st;
+	   else
+	     rx_sync_sm_st = SYNC_ACQUIRED_4_st;
+	end
 
-	   SYNC_ACQUIRED_3_st: begin
-	      rx_even = ~rx_even;
-	      good_cgs = 0;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = SYNC_ACQUIRED_3A_st;
-	      else 
-		rx_sync_sm_st = SYNC_ACQUIRED_4_st;
-	   end
+	SYNC_ACQUIRED_4_st: begin
+	   rx_even = ~rx_even;
+	   good_cgs = 0;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = SYNC_ACQUIRED_4A_st;
+	   else 
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
 
-	   SYNC_ACQUIRED_3A_st: begin
-	      rx_even = ~rx_even;
-	      ++good_cgs;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_2_st : SYNC_ACQUIRED_3A_st;
-	      else
-		rx_sync_sm_st = SYNC_ACQUIRED_4_st;
-	   end
+	SYNC_ACQUIRED_4A_st: begin
+	   rx_even = ~rx_even;
+	   ++good_cgs;
+	   if(is_cggood(rx_even))
+	     rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_3_st : SYNC_ACQUIRED_4A_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
 
-	   SYNC_ACQUIRED_4_st: begin
-	      rx_even = ~rx_even;
-	      good_cgs = 0;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = SYNC_ACQUIRED_4A_st;
-	      else 
-		rx_sync_sm_st = LOSS_OF_SYNC_st;
-	   end
+	default:
+	  `uvm_fatal(get_type_name(), "Synchronization SM failed state")
+	
+      endcase // case (rx_sync_sm_st)
 
-	   SYNC_ACQUIRED_4A_st: begin
-	      rx_even = ~rx_even;
-	      ++good_cgs;
-	      if(decoder.PUDI_cggood())
-		rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_3_st : SYNC_ACQUIRED_4A_st;
-	      else
-		rx_sync_sm_st = LOSS_OF_SYNC_st;
-	   end
-
-	   default:
-	     `uvm_fatal(get_type_name(), "Synchronization SM failed state")
-	   
-	 endcase // case (rx_sync_sm_st)
-
-	 `uvm_info("ETH_COMMON" , $sformatf("Current rx synchronization SM state: %s" , rx_sync_sm_st.name() ) , UVM_HIGH)
-	 
-	 decoder.SUDI_set_parity(rx_even);
-	 ->SUDI_e;
-	 
-      end // forever begin
-
-   join_none;
+      print_rx_sm_state(rx_sync_sm_st);
+      
+      decoder.SUDI_set_parity(rx_even);
+      
+      ->SUDI_e;
+      
+   end // forever begin
    
 endtask // pcs_synchronization_process
 
-task eth_common_methods::print_rx_sm_state
+function bit eth_common_methods::is_cggood
+  (
+   input bit rx_even
+   );
+   bit cggood;
+   
+   cggood = !((decoder.PUDI_is_comma() && rx_even == EVEN) || decoder.PUDI_is_invalid());
+   return cggood;   
+endfunction // is_cggood
+
+function void eth_common_methods::print_rx_sm_state
   (
    input rx_sync_sm_st_t rx_sync_sm_st
    );
@@ -488,8 +498,7 @@ task eth_common_methods::print_rx_sm_state
    debug_s = {debug_s,"--------------------------------\n\n"};   
    `uvm_info("ETH_COMMON" , debug_s , UVM_HIGH)
    
-endtask // print_rx_sm_state
-
+endfunction // print_rx_sm_state
 
 //-------------------------------------------------
 // 36.3 Physical Medium Attachment (PMA) sublayer
@@ -502,23 +511,26 @@ task eth_common_methods::pma_receive_process();
    logic [0:9] ten_bits;
    logic [0:39] four_ten_bits;
    int 		comma_position = '0;
-   boolen_t is_comma = FALSE;
+   
+   bit 		is_comma = 1'b0;
    
    forever begin      
       vif.read(ten_bits);
       four_ten_bits = {four_ten_bits[10:39],ten_bits};
-
+      
       `uvm_info("ETH_COMMON" , $sformatf("Received 10-bit: 0b%10b " , ten_bits) , UVM_FULL)
       `uvm_info("ETH_COMMON" , $sformatf("Four 10-bit: 0b%40b " , four_ten_bits) , UVM_FULL)
 
+      is_comma = 1'b0;
+      
       if(EN_CDEN == 1'b1) begin	
 	 for(int i = 0; i < 10; ++i) begin
 	    //`uvm_info("ETH_COMMON" , $sformatf("Comma try: %7b" , four_ten_bits[i+:7]) , UVM_FULL)
 	    if(check_comma(four_ten_bits[i+:7])) begin
 	       comma_position = i;
-	       is_comma = TRUE;
+	       is_comma = 1'b1;
 	       `uvm_info("ETH_COMMON" , $sformatf("Comma detected in pos %0d %7b" , comma_position , four_ten_bits[i+:7]) , UVM_FULL)
-	    end	 
+	    end
 	 end
       end
       else begin

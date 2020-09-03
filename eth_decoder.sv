@@ -123,14 +123,13 @@ function void eth_decoder::crd_rx_rules
    ones_abcdei = $countones(code_group[0:5]);
    ones_fghj = $countones(code_group[6:9]);
    
-   `uvm_info("ETH_DECODER" , $sformatf("CRD_RX : %s , ones_abcdei : %0d , ones_fghj : %0d" , crd , ones_abcdei , ones_fghj) , UVM_FULL)
+//   `uvm_info("ETH_DECODER" , $sformatf("\n\nCRD_RX : %s  \nCODE_GROUP : 0b%10b, \nones_abcdei : %0d , \nones_fghj : %0d\n" , crd.name() , code_group , ones_abcdei , ones_fghj) , UVM_FULL)
    
    if(ones_abcdei > 3 || (code_group[0:5] == 6'b000_111))
      crd = POSITIVE;
    else if(ones_abcdei < 3 || (code_group[0:5] == 6'b111_000))
      crd = NEGATIVE;
 
-   `uvm_info("ETH_DECODER" , $sformatf("CRD_RX : %s , ones_abcdei : %0d , ones_fghj : %0d" , crd , ones_abcdei , ones_fghj) , UVM_FULL)
    if(ones_fghj > 2 || (code_group[6:9] == 4'b00_11))
      crd = POSITIVE;
    else if(ones_fghj < 2 || (code_group[6:9] == 4'b11_00))
@@ -280,7 +279,10 @@ function void eth_decoder::print_code_group();
    end
       
    debug_s = {debug_s,cg_type_s};
-   debug_s = {debug_s,cg_name_s};   
+   debug_s = {debug_s,cg_name_s};
+   debug_s = {debug_s,$sformatf("cggood         : %b\n" , cggood)};
+   debug_s = {debug_s,$sformatf("rx_even        : %b\n" , rx_even)};
+   debug_s = {debug_s,$sformatf("is_comma        : %b\n" , is_comma)};
    debug_s = {debug_s,"--------------------------------\n\n"};   
 
    `uvm_info("ETH_DECODER" , debug_s , UVM_FULL)
