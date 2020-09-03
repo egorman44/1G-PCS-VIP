@@ -258,7 +258,6 @@ code_group_struct_t data_decode_neg_8b10b_table_aa[code_group_t] = '{
 	10'b101011_0001  :  '{ 10'b101011_0001 ,  8'hFF , "D31_7" }   
 };
 
-
 code_group_struct_t data_decode_pos_8b10b_table_aa[code_group_t] = '{
 	 // Positive CRD 
 	10'b011000_1011  :  '{ 10'b011000_1011 ,  8'h00 , "D0_0" } , 

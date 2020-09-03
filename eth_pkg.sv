@@ -47,7 +47,7 @@ package eth_pkg;
 		      COMMA_DETECT_3_st,
 		      SYNC_ACQUIRED_1_st,
 		      SYNC_ACQUIRED_2_st,
-		      SYNC_ACQUIRED_2A_st,
+ 		      SYNC_ACQUIRED_2A_st,
 		      SYNC_ACQUIRED_3_st,
 		      SYNC_ACQUIRED_3A_st,
 		      SYNC_ACQUIRED_4_st,
@@ -76,8 +76,15 @@ package eth_pkg;
 		      EXTEND_ERR_st
 		      } rx_receive_sm_st_t;
 
+  `ifndef NO_AGENT_COMPILATION
+  `include "eth_cfg.sv"
+//  `include "pudi_obj.sv"
+  `include "eth_seq_item.sv"   
   `include "eth_decoder.sv"
   `include "eth_common_methods.sv"
+  `include "eth_monitor.sv"
+ `endif
+   
    
 endpackage // eth_pkg
    

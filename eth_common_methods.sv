@@ -17,8 +17,8 @@ class eth_common_methods extends uvm_object;
    //////////////////
    // TODO: ANALYZE THIS SIGNALS
    // GMII interface
-   
-   bit 	   mr_loopback;
+
+   bit 	   EN_CDEN = 1'b1;
    
    logic   RX_ER;
    logic   RX_DV;
@@ -34,18 +34,21 @@ class eth_common_methods extends uvm_object;
    `uvm_object_utils_end
 
    extern function new(string name = "eth_common_methods");
-   
-   extern function boolen_t check_comma(logic [0:6] comma_try);
-   extern task receive();
-   extern task synchronization_process();
-   extern task ten_bit_counter();
 
+   extern task pma_receive_process();
+   extern task pcs_synchronization_process();
+   extern task pcs_receive_process();
+   
+   extern task print_rx_sm_state(rx_sync_sm_st_t rx_sync_sm_st);
+
+
+   extern function boolen_t check_comma(logic [0:6] comma_try);
 
 endclass // eth_common_methods
 
 function eth_common_methods::new(string name = "eth_common_methods");
    super.new(name);
-   decoder = eth_decoder::type_id::create("decoder",this);   
+   decoder = eth_decoder::type_id::create("decoder",null);   
 endfunction: new
 
 
@@ -55,10 +58,10 @@ endfunction: new
 
 // 36.2.5.2.2 Receive
 
-task eth_common_methods::receive();
+task eth_common_methods::pcs_receive_process();
    rx_receive_sm_st_t rx_receive_sm_st;
    boolen_t receiving;
-   
+
    forever begin
 
       wait(SUDI_e.triggered);
@@ -172,7 +175,7 @@ task eth_common_methods::receive();
 		if( !decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even())
 		  rx_receive_sm_st = WAIT_FOR_K_st;
 	   end // case: RX_INVALID_st
-	   	      
+	   
 	   START_OF_PACKET_st: begin
 	      RX_DV = '1;
 	      RX_ER = '0;
@@ -305,42 +308,54 @@ endtask // receive
 //------------------------------------------------------------------------
 // 36.2.5.2.6 Synchronization   
 
-task eth_common_methods::synchronization_process();
+task eth_common_methods::pcs_synchronization_process();
    
    int good_cgs = '0;      
-   bit  rx_even = '1;
+   bit rx_even = '1;
    
-   rx_sync_sm_st_t rx_sync_sm_st;
+   rx_sync_sm_st_t rx_sync_sm_st = LOSS_OF_SYNC_st;
 
-   forever begin
+   fork
 
-      // According to Figure 36-9-Synchronization SM state transitions occur
-      // only when new PUDI message has been received.
-      wait(PUDI_e.triggered);
-
-      // cgbad is not used in synchronization SM(for symplification)just because it's
-      // a negation of cgbad
-
-      if(vif.mr_main_reset == 1'b1 || vif.signal_detectCHANGE == TRUE && vif.mr_loopback == FALSE)begin
-	 rx_sync_sm_st = LOSS_OF_SYNC_st;
+      forever begin
+	 @(rx_sync_sm_st);	 
+	 print_rx_sm_state(rx_sync_sm_st);
       end
-      else begin
+      
+      forever begin
 
-	 rx_sync_sm_st = LOSS_OF_SYNC_st;
+	 // According to Figure 36-9-Synchronization SM state transitions occur
+	 // only when new PUDI message has been received.
+
+	 @PUDI_e;
+	 
+	 `uvm_info("ETH_COMMON" , $sformatf("PUDI event has occured"), UVM_FULL);
+	 
+
+	 // cgbad is not used in synchronization SM(for symplification)just because it's
+	 // a negation of cgbad
+
+	 
+	 if(vif.mr_main_reset == 1'b1)
+	   rx_sync_sm_st = LOSS_OF_SYNC_st;
 	 
 	 case(rx_sync_sm_st)
 	   
 	   LOSS_OF_SYNC_st: begin
 	      sync_status = FALSE;	   
-	      rx_even = ~rx_even;	   
-	      if(decoder.PUDI_is_comma && (vif.signal_detect == TRUE || mr_loopback == TRUE))
+	      rx_even = ~rx_even;
+	      if(decoder.PUDI_is_comma() && (vif.signal_detect == 1'b1 || vif.mr_loopback == 1'b1))
 		rx_sync_sm_st = COMMA_DETECT_1_st;
+	      else
+		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	   end
 	   
 	   COMMA_DETECT_1_st: begin
 	      rx_even = EVEN;
-	      if(decoder.SUDI_is_data())
-		rx_sync_sm_st = ACQUIRE_SYNC_1_st;	   
+	      if(decoder.PUDI_is_data())
+		rx_sync_sm_st = ACQUIRE_SYNC_1_st;
+	      else
+		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	   end
 	   
 	   ACQUIRE_SYNC_1_st: begin
@@ -349,29 +364,43 @@ task eth_common_methods::synchronization_process();
 		rx_sync_sm_st = COMMA_DETECT_2_st;
 	      else if(!decoder.SUDI_is_invalid() && !decoder.PUDI_is_comma())
 		rx_sync_sm_st = ACQUIRE_SYNC_1_st;
+	      else
+		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	   end
 
 	   COMMA_DETECT_2_st: begin
 	      rx_even = EVEN;
 	      if(decoder.SUDI_is_data())
 		rx_sync_sm_st = ACQUIRE_SYNC_2_st;
+	      else
+		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	   end
 
 	   ACQUIRE_SYNC_2_st: begin
 	      rx_even = ~rx_even;
 	      if(rx_even == FALSE && decoder.PUDI_is_comma)
 		rx_sync_sm_st = COMMA_DETECT_3_st;
-	      else if(decoder.PUDI_is_invalid() == FALSE && decoder.PUDI_is_comma())
+	      else if(decoder.PUDI_is_invalid() && decoder.PUDI_is_comma())
 		rx_sync_sm_st = ACQUIRE_SYNC_2_st;
+	      else
+		rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	   end
 
+	   COMMA_DETECT_3_st: begin
+	      rx_even = TRUE;
+	      if(decoder.PUDI_is_data())
+		rx_sync_sm_st = SYNC_ACQUIRED_1_st;
+	      else
+		rx_sync_sm_st = LOSS_OF_SYNC_st;
+	   end
+	   
 	   SYNC_ACQUIRED_1_st: begin
 	      sync_status = TRUE;
 	      rx_even = ~rx_even;
 	      if(decoder.PUDI_cggood())
 		rx_sync_sm_st = SYNC_ACQUIRED_1_st;
 	      else
-		rx_sync_sm_st = SYNC_ACQUIRED_2_st;	   
+		rx_sync_sm_st = SYNC_ACQUIRED_2_st;
 	   end
 
 	   SYNC_ACQUIRED_2_st: begin
@@ -433,13 +462,33 @@ task eth_common_methods::synchronization_process();
 	   
 	 endcase // case (rx_sync_sm_st)
 
+	 `uvm_info("ETH_COMMON" , $sformatf("Current rx synchronization SM state: %s" , rx_sync_sm_st.name() ) , UVM_HIGH)
+	 
 	 decoder.SUDI_set_parity(rx_even);
 	 ->SUDI_e;
 	 
-      end // else: !if(vif.mr_main_reset == 1'b1 || vif.signal_detectCHANGE == TRUE && vif.mr_loopback == FALSE)      
-   end // forever begin
-         
-endtask // synchronization_process
+      end // forever begin
+
+   join_none;
+   
+endtask // pcs_synchronization_process
+
+task eth_common_methods::print_rx_sm_state
+  (
+   input rx_sync_sm_st_t rx_sync_sm_st
+   );
+   
+   string debug_s = "";
+   
+   debug_s = {debug_s,"\n\n"};   
+   debug_s = {debug_s,"--------------------------------\n"};
+   debug_s = {debug_s,$sformatf("rx_sync_state\n")};
+   debug_s = {debug_s,"--------------------------------\n"};
+   debug_s = {debug_s,$sformatf("current state: %s\n",rx_sync_sm_st.name())};
+   debug_s = {debug_s,"--------------------------------\n\n"};   
+   `uvm_info("ETH_COMMON" , debug_s , UVM_HIGH)
+   
+endtask // print_rx_sm_state
 
 
 //-------------------------------------------------
@@ -448,26 +497,27 @@ endtask // synchronization_process
 
 // 36.3.2.3 PMA receive function and 3.3.2.4 Code-group alignment process
 
-task eth_common_methods::ten_bit_counter();
+task eth_common_methods::pma_receive_process();
    
-   logic [0:9] shift_data;
+   logic [0:9] ten_bits;
    logic [0:39] four_ten_bits;
    int 		comma_position = '0;
    boolen_t is_comma = FALSE;
    
-   
-   forever begin
-      repeat(10) begin
-	 @(vif.cb);
-	 shift_data = {shift_data[1:9],vif.txp};
-      end
-      four_ten_bits = {four_ten_bits[10:29],shift_data};
+   forever begin      
+      vif.read(ten_bits);
+      four_ten_bits = {four_ten_bits[10:39],ten_bits};
 
-      if(is_comma == FALSE) begin	
+      `uvm_info("ETH_COMMON" , $sformatf("Received 10-bit: 0b%10b " , ten_bits) , UVM_FULL)
+      `uvm_info("ETH_COMMON" , $sformatf("Four 10-bit: 0b%40b " , four_ten_bits) , UVM_FULL)
+
+      if(EN_CDEN == 1'b1) begin	
 	 for(int i = 0; i < 10; ++i) begin
+	    //`uvm_info("ETH_COMMON" , $sformatf("Comma try: %7b" , four_ten_bits[i+:7]) , UVM_FULL)
 	    if(check_comma(four_ten_bits[i+:7])) begin
 	       comma_position = i;
 	       is_comma = TRUE;
+	       `uvm_info("ETH_COMMON" , $sformatf("Comma detected in pos %0d %7b" , comma_position , four_ten_bits[i+:7]) , UVM_FULL)
 	    end	 
 	 end
       end
@@ -480,9 +530,10 @@ task eth_common_methods::ten_bit_counter();
       
       decoder.PUDI_set_code_group(four_ten_bits[comma_position+:30]);
       decoder.PUDI_set_comma(is_comma);
-      decoder.PUDI_calc();      
-      
+      decoder.PUDI_calc();
+
       ->PUDI_e;
+      `uvm_info("ETH_COMMON" , $sformatf("PUDI has triggered ") , UVM_FULL)
    end   
 endtask // counter_event
 
@@ -495,3 +546,4 @@ function boolen_t eth_common_methods::check_comma(logic [0:6] comma_try);
 endfunction // check_comma   
 
 `endif //  `ifndef _ETH_COMMON_METHODS_
+

@@ -1,6 +1,6 @@
 /*
  eth_decoder is auxilary class that stores derived signals from code_croup 
- that helps to transmit in state machins.
+ that helps to transmit in state machines.
  */
 
 class eth_decoder extends uvm_object;
@@ -33,7 +33,10 @@ class eth_decoder extends uvm_object;
    // Decode methods
    extern function void decode_8b10b(code_group_t code_group , crd_t CRD);
    extern function void PUDI_calc();
-   extern function crd_t crd_rx_rules(code_group_t code_group);
+   extern function void crd_rx_rules(code_group_t code_group, ref crd_t crd);
+
+   // Print th content
+   extern function void print_code_group();
    
    // Setter methods
    extern function void RUDI_set(rudi_t_wrap::RUDI_t RUDI);
@@ -79,7 +82,9 @@ function eth_decoder::new(string name = "eth_decoder");
 endfunction: new
 
 function void eth_decoder::PUDI_calc();
-   decode_8b10b(three_code_group[0] , CRD_RX);   
+   decode_8b10b(current_code_group , CRD_RX);
+   print_code_group();   
+   crd_rx_rules(current_code_group , CRD_RX);
 endfunction // decode
 
 // 36.2.4.6 Checking the validity of received code-groups
@@ -89,13 +94,13 @@ function void eth_decoder::decode_8b10b(code_group_t code_group , crd_t CRD);
    is_data	= '0;
    is_invalid	= '0;
    
-   if(data_decode_8b10b_table_aa[CRD].exists(code_group[0])) begin
+   if(data_decode_8b10b_table_aa[CRD].exists(code_group)) begin
       is_data = '1;
-      code_group_struct = data_decode_8b10b_table_aa[CRD][code_group[0]];      
+      code_group_struct = data_decode_8b10b_table_aa[CRD][code_group];
    end
-   else if(spec_decode_8b10b_table_aa[CRD].exists(code_group[0])) begin
+   else if(spec_decode_8b10b_table_aa[CRD].exists(code_group)) begin
       is_special = '1;
-      code_group_struct = spec_decode_8b10b_table_aa[CRD][code_group[0]];
+      code_group_struct = spec_decode_8b10b_table_aa[CRD][code_group];
    end
    else begin
       is_invalid = '1;
@@ -103,26 +108,33 @@ function void eth_decoder::decode_8b10b(code_group_t code_group , crd_t CRD);
 
    cggood = !((is_comma && rx_even == EVEN) || is_invalid);
    cgbad  =  ((is_comma && rx_even == EVEN) || is_invalid);	 
-
+   
 endfunction // decode
 
 // 36.2.4.4 Running disparity rules
-function crd_t eth_decoder::crd_rx_rules(code_group_t code_group);
+function void eth_decoder::crd_rx_rules
+  (
+   code_group_t code_group,
+   ref crd_t crd
+   );
    
    int ones_abcdei, ones_fghj;
-   
+      
    ones_abcdei = $countones(code_group[0:5]);
    ones_fghj = $countones(code_group[6:9]);
-
-   if(ones_abcdei > 3 && (code_group[0:5] == 6'b000_111))
-     CRD_RX = POSITIVE;
-   else if(ones_abcdei < 3 && (code_group[0:5] == 6'b111_000))
-     CRD_RX = NEGATIVE;
    
-   if(ones_fghj > 2 && (code_group[6:9] == 4'b00_11))
-     CRD_RX = POSITIVE;
-   else if(ones_fghj < 2 && (code_group[6:9] == 4'b11_00))
-     CRD_RX = NEGATIVE;
+   `uvm_info("ETH_DECODER" , $sformatf("CRD_RX : %s , ones_abcdei : %0d , ones_fghj : %0d" , crd , ones_abcdei , ones_fghj) , UVM_FULL)
+   
+   if(ones_abcdei > 3 || (code_group[0:5] == 6'b000_111))
+     crd = POSITIVE;
+   else if(ones_abcdei < 3 || (code_group[0:5] == 6'b111_000))
+     crd = NEGATIVE;
+
+   `uvm_info("ETH_DECODER" , $sformatf("CRD_RX : %s , ones_abcdei : %0d , ones_fghj : %0d" , crd , ones_abcdei , ones_fghj) , UVM_FULL)
+   if(ones_fghj > 2 || (code_group[6:9] == 4'b00_11))
+     crd = POSITIVE;
+   else if(ones_fghj < 2 || (code_group[6:9] == 4'b11_00))
+     crd = NEGATIVE;
    
 endfunction // crd_rx_rules
 
@@ -239,5 +251,39 @@ endfunction // is_S_ordered_set
 
 function bit eth_decoder::is_R_ordered_set();
 endfunction // is_R_ordered_set
+
+function void eth_decoder::print_code_group();
+   string debug_s = "";
+   string cg_name_s = "";
+   string cg_type_s = "";
+      
+   debug_s = {debug_s,"\n\n"};   
+   debug_s = {debug_s,"--------------------------------\n"};   
+   debug_s = {debug_s,$sformatf("rx_code_group\n")};   
+   debug_s = {debug_s,"--------------------------------\n"};
+   debug_s = {debug_s,$sformatf("CRD_RX         : %s\n" , CRD_RX.name())};
+   debug_s = {debug_s,$sformatf("bin_val        : 10'b%6b_%4b\n" , current_code_group[0:5] , current_code_group[6:9])};
+   
+   cg_type_s = {cg_type_s,$sformatf("code_goup_type : ")};
+   cg_name_s = {cg_name_s,$sformatf("code_goup_name : ")};   
+   if(is_data) begin
+      cg_type_s = {cg_type_s,$sformatf("DATA\n")};
+      cg_name_s = {cg_name_s,$sformatf("%s\n",code_group_struct.code_group_name)};
+   end
+   else if(is_special) begin
+      cg_type_s = {cg_type_s,$sformatf("SPECIAL\n")};
+      cg_name_s = {cg_name_s,$sformatf("%s\n",code_group_struct.code_group_name)};
+   end
+   else begin
+      cg_type_s = {cg_type_s,$sformatf("INVALID\n")};
+      cg_name_s = {cg_name_s,$sformatf("%s","INVALID\n")};
+   end
+      
+   debug_s = {debug_s,cg_type_s};
+   debug_s = {debug_s,cg_name_s};   
+   debug_s = {debug_s,"--------------------------------\n\n"};   
+
+   `uvm_info("ETH_DECODER" , debug_s , UVM_FULL)
+endfunction // print_code_group
 
 
