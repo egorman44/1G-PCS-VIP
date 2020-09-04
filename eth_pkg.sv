@@ -36,9 +36,18 @@ package eth_pkg;
       octet_t octet_val;
    } crd_octet_t;
 
-
+   typedef struct{
+      string 	 footer_name_s;
+      string 	 footer_val_s;
+   } footer_struct_t;
    
-     
+   typedef struct {
+      string 	  header_s;
+      footer_struct_t footer_q[$];      
+   } print_struct_t;
+
+
+        
    typedef enum      {LOSS_OF_SYNC_st ,
 		      COMMA_DETECT_1_st,
 		      ACQUIRE_SYNC_1_st,
@@ -77,13 +86,14 @@ package eth_pkg;
 		      } rx_receive_sm_st_t;
 
   `ifndef NO_AGENT_COMPILATION
-  `include "eth_cfg.sv"
+   `include "eth_cfg.sv"
+   `include "message_print.sv"
 //  `include "pudi_obj.sv"
-  `include "eth_seq_item.sv"   
-  `include "eth_decoder.sv"
-  `include "eth_common_methods.sv"
-  `include "eth_monitor.sv"
- `endif
+   `include "eth_seq_item.sv"   
+   `include "eth_decoder.sv"
+   `include "eth_common_methods.sv"
+   `include "eth_monitor.sv"
+  `endif
    
    
 endpackage // eth_pkg

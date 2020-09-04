@@ -11,6 +11,8 @@ class eth_decoder extends uvm_object;
    `uvm_object_utils_begin(eth_decoder)
    `uvm_object_utils_end
 
+   message_print msg_print;
+   
    code_group_struct_t code_group_struct;
 
    code_group_t [3] three_code_group;
@@ -252,40 +254,38 @@ function bit eth_decoder::is_R_ordered_set();
 endfunction // is_R_ordered_set
 
 function void eth_decoder::print_code_group();
-   string debug_s = "";
-   string cg_name_s = "";
-   string cg_type_s = "";
-      
-   debug_s = {debug_s,"\n\n"};   
-   debug_s = {debug_s,"--------------------------------\n"};   
-   debug_s = {debug_s,$sformatf("rx_code_group\n")};   
-   debug_s = {debug_s,"--------------------------------\n"};
-   debug_s = {debug_s,$sformatf("CRD_RX         : %s\n" , CRD_RX.name())};
-   debug_s = {debug_s,$sformatf("bin_val        : 10'b%6b_%4b\n" , current_code_group[0:5] , current_code_group[6:9])};
-   
-   cg_type_s = {cg_type_s,$sformatf("code_goup_type : ")};
-   cg_name_s = {cg_name_s,$sformatf("code_goup_name : ")};   
-   if(is_data) begin
-      cg_type_s = {cg_type_s,$sformatf("DATA\n")};
-      cg_name_s = {cg_name_s,$sformatf("%s\n",code_group_struct.code_group_name)};
-   end
-   else if(is_special) begin
-      cg_type_s = {cg_type_s,$sformatf("SPECIAL\n")};
-      cg_name_s = {cg_name_s,$sformatf("%s\n",code_group_struct.code_group_name)};
-   end
-   else begin
-      cg_type_s = {cg_type_s,$sformatf("INVALID\n")};
-      cg_name_s = {cg_name_s,$sformatf("%s","INVALID\n")};
-   end
-      
-   debug_s = {debug_s,cg_type_s};
-   debug_s = {debug_s,cg_name_s};
-   debug_s = {debug_s,$sformatf("cggood         : %b\n" , cggood)};
-   debug_s = {debug_s,$sformatf("rx_even        : %b\n" , rx_even)};
-   debug_s = {debug_s,$sformatf("is_comma        : %b\n" , is_comma)};
-   debug_s = {debug_s,"--------------------------------\n\n"};   
 
-   `uvm_info("ETH_DECODER" , debug_s , UVM_FULL)
+   print_struct_t print_struct;   
+   footer_struct_t footer_struct;
+
+   print_struct.header_s = "rx_code_group";
+   
+   footer_struct.footer_name_s = "CRD_RX";
+   footer_struct.footer_val_s = CRD_RX.name();
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "bin_val";
+   footer_struct.footer_val_s = $sformatf("10'b%6b_%4b" , current_code_group[0:5] , current_code_group[6:9]);
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "code_group_type";
+   if(is_data)
+     footer_struct.footer_val_s = "DATA";
+   else if(is_special)
+     footer_struct.footer_val_s = "SPECIAL";
+   else
+     footer_struct.footer_val_s = "INVALID";
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "code_group_name";
+   if(is_data || is_special)
+     footer_struct.footer_val_s = code_group_struct.code_group_name;
+   else
+     footer_struct.footer_val_s = "INVALID";
+   print_struct.footer_q.push_back(footer_struct);
+
+   msg_print.print(print_struct);   
+
 endfunction // print_code_group
 
 

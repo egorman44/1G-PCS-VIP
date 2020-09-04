@@ -11,7 +11,7 @@ class eth_common_methods extends uvm_object;
    boolen_t sync_status;
 
    eth_decoder decoder;
-   
+   message_print msg_print;
    event   SUDI_e, PUDI_e;
    
    //////////////////
@@ -487,16 +487,16 @@ function void eth_common_methods::print_rx_sm_state
   (
    input rx_sync_sm_st_t rx_sync_sm_st
    );
+
+   print_struct_t print_struct;   
+   footer_struct_t footer_struct;   
+
+   print_struct.header_s	= "rx_sync_state";   
+   footer_struct.footer_name_s	= "current_state";
+   footer_struct.footer_val_s	= rx_sync_sm_st.name();
    
-   string debug_s = "";
-   
-   debug_s = {debug_s,"\n\n"};   
-   debug_s = {debug_s,"--------------------------------\n"};
-   debug_s = {debug_s,$sformatf("rx_sync_state\n")};
-   debug_s = {debug_s,"--------------------------------\n"};
-   debug_s = {debug_s,$sformatf("current state: %s\n",rx_sync_sm_st.name())};
-   debug_s = {debug_s,"--------------------------------\n\n"};   
-   `uvm_info("ETH_COMMON" , debug_s , UVM_HIGH)
+   print_struct.footer_q.push_back(footer_struct);
+   msg_print.print(print_struct);
    
 endfunction // print_rx_sm_state
 
