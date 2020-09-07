@@ -26,20 +26,23 @@ function void message_print::print(print_struct_t msg_struct);
    debug_s = {debug_s , delimeter_s , "\n"};   
    debug_s = {debug_s , msg_struct.header_s , "\n"};
    debug_s = {debug_s , delimeter_s , "\n"};
- 
-   // 1. Find the longest footer_name_s to align printing message
-   foreach(msg_struct.footer_q[i]) begin
-      if(msg_struct.footer_q[i].footer_name_s.len() > longest_footer_size)
-	longest_footer_size = msg_struct.footer_q[i].footer_name_s.len();      
-   end
-   
-   // 2. Add padding and concatenate with debug string
-   foreach(msg_struct.footer_q[i]) begin
-      msg_struct.footer_q[i].footer_name_s = space_padding(msg_struct.footer_q[i].footer_name_s, longest_footer_size);
-      debug_s = {debug_s, msg_struct.footer_q[i].footer_name_s , ":" , msg_struct.footer_q[i].footer_val_s , "\n"};      
-   end
 
-   debug_s = {debug_s , delimeter_s , "\n"};
+   // If the message have a footer
+   if(msg_struct.footer_q.size()) begin
+      // 1. Find the longest footer_name_s to align printing message
+      foreach(msg_struct.footer_q[i]) begin
+	 if(msg_struct.footer_q[i].footer_name_s.len() > longest_footer_size)
+	   longest_footer_size = msg_struct.footer_q[i].footer_name_s.len();      
+      end
+      
+      // 2. Add padding and concatenate with debug string
+      foreach(msg_struct.footer_q[i]) begin
+	 msg_struct.footer_q[i].footer_name_s = space_padding(msg_struct.footer_q[i].footer_name_s, longest_footer_size);
+	 debug_s = {debug_s, msg_struct.footer_q[i].footer_name_s , ":" , msg_struct.footer_q[i].footer_val_s , "\n"};      
+      end      
+      debug_s = {debug_s , delimeter_s , "\n"};
+   end // if (msg_struct.footer_q.size())
+   
    
    `uvm_info("MSG_PRINT" , debug_s , UVM_LOW);
    

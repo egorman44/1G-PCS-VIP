@@ -14,7 +14,7 @@ class eth_decoder extends uvm_object;
    message_print msg_print;
    
    code_group_struct_t code_group_struct;
-
+   
    code_group_t [3] three_code_group;
    code_group_t current_code_group;
    crd_t CRD_RX;
@@ -161,13 +161,22 @@ endfunction // PUDI_set_comma
 
 ///////////////////////////////////////////
 // Getter Mathods
+///////////////////////////////////////////
 
+//function bit check_code_group_name
+//  (
+//   input string 
+//   );
+//   
+//endfunction // get_code_group_name
+
+ 
 function bit eth_decoder::SUDI_is_K28_5();
-   return is_comma;
+   return (code_group_struct.code_group_name == "K28_5");
 endfunction // PUDI_is_comma
 
 function bit eth_decoder::SUDI_is_D21_5();
-   return is_comma;
+   return (code_group_struct.code_group_name == "K28_5");
 endfunction // PUDI_is_comma
 
 function bit eth_decoder::SUDI_is_D2_2();
