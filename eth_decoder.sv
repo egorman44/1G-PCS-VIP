@@ -1,3 +1,4 @@
+
 /*
  eth_decoder is auxilary class that stores derived signals from code_croup 
  that helps to transmit in state machines.
@@ -5,77 +6,63 @@
 
 class eth_decoder extends uvm_object;
 
-`include "data_8b10b.sv"
-`include "spec_8b10b.sv"
+`include "decode_8b10b.sv"
 
    `uvm_object_utils_begin(eth_decoder)
    `uvm_object_utils_end
 
+   // Handle for printer object
    message_print msg_print;
+
+   // queue with three items is used to store three 
+   // consecutive code-groups for check_end() funciton.
    
-   code_group_struct_t code_group_struct;
+   cg_struct_t cg_struct_q[$];
+
+   // code group that is used for all calculations at
+   // a current time slot. The current code-group is located 
+   // in the cg_struct_q[2] item, since set_cg() function 
+   // uses pysh_front() to shift items into the queue
    
-   code_group_t [3] three_code_group;
-   code_group_t current_code_group;
+   cg_struct_t cg_struct_current;
+   
+
+   // current value of RX running disparity
    crd_t CRD_RX;
-      
-   bit is_comma; // Signal that indicates succesful code-group alignment
-   bit is_special;
-   bit is_data;
-   bit is_invalid;
-   bit cgbad, cggood;
    
    bit rx_even;
 
    // TODO:: analyze signals
    rudi_t_wrap::RUDI_t RUDI;
-      
+   
    extern function new(string name = "eth_decoder");
 
    // Decode methods
-   extern function void decode_8b10b(code_group_t code_group , crd_t CRD);
-   extern function void PUDI_calc();
-   extern function void crd_rx_rules(code_group_t code_group, ref crd_t crd);
-
+   extern function cg_struct_t decode_8b10b(cg_t cg , crd_t CRD, bit comma);
+   extern function void crd_rx_rules(cg_t cg, ref crd_t crd);
+   extern function bit carrier_detect();
+   
    // Print th content
-   extern function void print_code_group();
+   extern function void cg_print(cg_struct_t cg_struct = cg_struct_current);
    
    // Setter methods
-   extern function void RUDI_set(rudi_t_wrap::RUDI_t RUDI);
-   extern function void SUDI_set_parity(bit rx_even);
-   extern function void PUDI_set_comma(bit is_comma);
-   extern function void PUDI_set_code_group(code_group_t [3] code_group);   
+   extern function void cg_set(cg_t cg, bit comma);   
    
    // Getter methods
-   extern function bit PUDI_is_comma();
-   extern function bit PUDI_is_special();
-   extern function bit PUDI_is_data();
-   extern function bit PUDI_is_invalid();
-   extern function bit PUDI_cggood();
-   extern function bit PUDI_cgbad();
+   //   extern function bit PUDI_is_comma();
 
-   extern function string SUDI_get_code_group_name();
+   extern function bit cg_check_type(cg_type_t cg_type);
+   extern function bit cg_check_name(string cg_name, cg_struct_t cg_struct = cg_struct_current);
+   extern function bit cg_is_comma();
+   extern function octet_t cg_decode();
    
+   extern function bit check_end(string cg_name_a[3]);
+
    extern function bit SUDI_is_rx_even();
-   extern function bit SUDI_is_invalid();
-   extern function bit SUDI_is_data();
-   extern function bit SUDI_is_K28_5();
-   extern function bit SUDI_is_D2_2();
-   extern function bit SUDI_is_D21_5();
-   
-   extern function bit is_S_ordered_set();
-   extern function bit is_R_ordered_set();   
-   
-   extern function octet_t DECODE();
+   extern function void SUDI_set_parity(bit rx_even);
 
-   extern function bit check_end___K28_5___D___K28_5();
-   extern function bit check_end___K28_5___D21_5___D0_0();
-   extern function bit check_end___K28_5___D2_2___D0_0();
-   extern function bit check_end___T___R___K28_5();
-   extern function bit check_end___T___R___R();
-   extern function bit check_end___R___R___R();
-   extern function bit check_end___R___R___S();
-   extern function bit check_end___R___R___K28_5();
+   extern function string os_convert(string os_name);
+   extern function bit os_check(string os_name , cg_struct_t cg_struct = cg_struct_current);
    
 endclass // eth_decoder
 
@@ -83,218 +70,200 @@ function eth_decoder::new(string name = "eth_decoder");
    super.new(name);
 endfunction: new
 
-function void eth_decoder::PUDI_calc();
-   decode_8b10b(current_code_group , CRD_RX);
-   print_code_group();   
-   crd_rx_rules(current_code_group , CRD_RX);
-endfunction // decode
+// 36.2.5.1.4 Functions carrier_detect
+function bit eth_decoder::carrier_detect();
+
+   cg_t cg_K28_5_pos = 10'b001111_1010;
+   cg_t cg_K28_5_neg = 10'b110000_0101;
+   cg_t compare_vec_pos, compare_vec_neg;
+   int diff_neg , diff_pos;
+   
+   compare_vec_neg = cg_struct_current.cg ^ cg_K28_5_neg;
+   compare_vec_pos = cg_struct_current.cg ^ cg_K28_5_pos;
+
+   diff_neg = $countones(compare_vec_neg);
+   diff_pos = $countones(compare_vec_pos);
+
+   `uvm_info("ETH_DECODER" , $sformatf("POSITIVE: compare = %10b , diff = %0d" , compare_vec_pos, diff_pos) , UVM_FULL)
+   `uvm_info("ETH_DECODER" , $sformatf("NEGATIVE: compare = %10b , diff = %0d" , compare_vec_neg, diff_neg) , UVM_FULL)
+   
+   carrier_detect = 0;
+
+   if(rx_even) begin
+      if(diff_pos > 2 && diff_neg > 2)
+	carrier_detect = 1;
+      if(CRD_RX && diff_pos >= 2 && diff_pos <= 9)
+	carrier_detect = 1;
+      if(~CRD_RX && diff_neg >= 2 && diff_neg <= 9)
+	carrier_detect = 1;
+   end
+   
+endfunction // carrier_detect
 
 // 36.2.4.6 Checking the validity of received code-groups
-function void eth_decoder::decode_8b10b(code_group_t code_group , crd_t CRD);
+function cg_struct_t eth_decoder::decode_8b10b(cg_t cg , crd_t CRD, bit comma);
    
-   is_special	= '0;
-   is_data	= '0;
-   is_invalid	= '0;
+   cg_struct_t cg_struct;
    
-   if(data_decode_8b10b_table_aa[CRD].exists(code_group)) begin
-      is_data = '1;
-      code_group_struct = data_decode_8b10b_table_aa[CRD][code_group];
+   cg_struct.cg = cg;
+
+   `uvm_info("ETH_DECODER" , $sformatf("CRD: %0s CG: %10b" , CRD.name() , cg) , UVM_FULL)
+   
+   if(data_decode_8b10b_table_aa[CRD].exists(cg)) begin
+      cg_struct.cg_type = DATA;
+      cg_struct.octet = data_decode_8b10b_table_aa[CRD][cg];
+      cg_struct.cg_name = $sformatf("D%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
    end
-   else if(spec_decode_8b10b_table_aa[CRD].exists(code_group)) begin
-      is_special = '1;
-      code_group_struct = spec_decode_8b10b_table_aa[CRD][code_group];
+   else if(spec_decode_8b10b_table_aa[CRD].exists(cg)) begin
+      cg_struct.cg_type = SPECIAL;
+      cg_struct.octet = spec_decode_8b10b_table_aa[CRD][cg];
+      cg_struct.cg_name = $sformatf("K%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
    end
-   else begin
-      is_invalid = '1;
+   else begin 
+      cg_struct.cg_type = INVALID;
+      cg_struct.cg_name = "INVALID";      
    end
 
-   cggood = !((is_comma && rx_even == EVEN) || is_invalid);
-   cgbad  =  ((is_comma && rx_even == EVEN) || is_invalid);	 
+   `uvm_info("ETH_DECODER" , $sformatf("DATA VAL: %8b %0s" , cg_struct.octet , cg_struct.cg_name) , UVM_FULL)
+   cg_struct.comma = comma;
+   
+   return cg_struct;
    
 endfunction // decode
 
 // 36.2.4.4 Running disparity rules
 function void eth_decoder::crd_rx_rules
   (
-   code_group_t code_group,
+   cg_t cg,
    ref crd_t crd
    );
    
    int ones_abcdei, ones_fghj;
-      
-   ones_abcdei = $countones(code_group[0:5]);
-   ones_fghj = $countones(code_group[6:9]);
    
-//   `uvm_info("ETH_DECODER" , $sformatf("\n\nCRD_RX : %s  \nCODE_GROUP : 0b%10b, \nones_abcdei : %0d , \nones_fghj : %0d\n" , crd.name() , code_group , ones_abcdei , ones_fghj) , UVM_FULL)
+   ones_abcdei = $countones(cg[0:5]);
+   ones_fghj = $countones(cg[6:9]);
    
-   if(ones_abcdei > 3 || (code_group[0:5] == 6'b000_111))
+   //   `uvm_info("ETH_DECODER" , $sformatf("\n\nCRD_RX : %s  \nCG : 0b%10b, \nones_abcdei : %0d , \nones_fghj : %0d\n" , crd.name() , cg , ones_abcdei , ones_fghj) , UVM_FULL)
+   
+   if(ones_abcdei > 3 || (cg[0:5] == 6'b000_111))
      crd = POSITIVE;
-   else if(ones_abcdei < 3 || (code_group[0:5] == 6'b111_000))
+   else if(ones_abcdei < 3 || (cg[0:5] == 6'b111_000))
      crd = NEGATIVE;
 
-   if(ones_fghj > 2 || (code_group[6:9] == 4'b00_11))
+   if(ones_fghj > 2 || (cg[6:9] == 4'b00_11))
      crd = POSITIVE;
-   else if(ones_fghj < 2 || (code_group[6:9] == 4'b11_00))
+   else if(ones_fghj < 2 || (cg[6:9] == 4'b11_00))
      crd = NEGATIVE;
    
 endfunction // crd_rx_rules
 
 ///////////////////////////////////////////
 // Setter Mathods
+///////////////////////////////////////////
 
-function void eth_decoder::RUDI_set(rudi_t_wrap::RUDI_t RUDI);
-   this.RUDI = RUDI;
-endfunction // RUDI_set
-
-function void eth_decoder::SUDI_set_parity(bit rx_even);
-   this.rx_even = rx_even;
-endfunction // SUDI_set_parity
-
-function void eth_decoder::PUDI_set_comma(bit is_comma);   
-  this.is_comma = is_comma;
-endfunction // PUDI_set_comma
-
-function void eth_decoder::PUDI_set_code_group(code_group_t [3] code_group);   
-   three_code_group = code_group;
-   current_code_group = code_group[0];   
+function void eth_decoder::cg_set(cg_t cg, bit comma);
+   
+   cg_struct_q.push_front(decode_8b10b(cg, CRD_RX, comma));
+   if(cg_struct_q.size() > 2) begin
+      cg_struct_current = cg_struct_q[2];
+      cg_print();      
+   end
+   if(cg_struct_q.size() == 4)
+     cg_struct_q.delete(3); 
+   crd_rx_rules(cg , CRD_RX);   
 endfunction // PUDI_set_comma
 
 ///////////////////////////////////////////
 // Getter Mathods
 ///////////////////////////////////////////
 
-//function bit check_code_group_name
-//  (
-//   input string 
-//   );
-//   
-//endfunction // get_code_group_name
+function bit eth_decoder::cg_check_type(cg_type_t cg_type);
+   return cg_struct_current.cg_type == cg_type;
+endfunction // cg_check_type
 
- 
-function bit eth_decoder::SUDI_is_K28_5();
-   return (code_group_struct.code_group_name == "K28_5");
-endfunction // PUDI_is_comma
+function bit eth_decoder::cg_check_name(string cg_name, cg_struct_t cg_struct = cg_struct_current);
+   return cg_struct.cg_name == cg_name;
+endfunction // cg_check_name
 
-function bit eth_decoder::SUDI_is_D21_5();
-   return (code_group_struct.code_group_name == "K28_5");
-endfunction // PUDI_is_comma
-
-function bit eth_decoder::SUDI_is_D2_2();
-   return is_comma;
-endfunction // PUDI_is_comma
-
-function bit eth_decoder::PUDI_is_comma();
-   return is_comma;
-endfunction // PUDI_is_comma
-
-function bit eth_decoder::PUDI_is_special();
-   return is_special;
-endfunction
-
-function bit eth_decoder::PUDI_is_data();
-   return is_data;
-endfunction // PUDI_is_data
-
-function bit eth_decoder::PUDI_is_invalid();
-   return is_invalid;
-endfunction // PUDI_is_invalid
-
-function bit eth_decoder::PUDI_cggood();
-   return cggood;
-endfunction // PUDI_is_comma
-
-function bit eth_decoder::PUDI_cgbad();
-   return cgbad;
-endfunction // PUDI_is_comma
+function bit eth_decoder::cg_is_comma();
+   return cg_struct_current.comma;
+endfunction // cg_is_comma
 
 function bit eth_decoder::SUDI_is_rx_even();
    return rx_even;
-endfunction // PUDI_is_comma
+endfunction // SUDI_is_rx_even
 
-function bit eth_decoder::SUDI_is_invalid();
-   return is_invalid;
-endfunction // PUDI_is_comma
+function void eth_decoder::SUDI_set_parity(bit rx_even);
+   this.rx_even = rx_even;
+endfunction // SUDI_set_parity
 
-function bit eth_decoder::SUDI_is_data();
-   return is_data;
-endfunction // PUDI_is_comma
-
-function string eth_decoder::SUDI_get_code_group_name();
-   return code_group_struct.code_group_name;
-endfunction // SUDI_get_code_group_name
-
-function octet_t eth_decoder::DECODE();
-   return code_group_struct.octet;
-endfunction // SUDI_get_code_group_name
+function octet_t eth_decoder::cg_decode();
+   cg_decode = cg_struct_current.octet;   
+endfunction // cg_decode
 
 ///////////////////////////////////////////////
 // check_end functions implementation
 
-function bit eth_decoder::check_end___K28_5___D___K28_5();
-endfunction // check_end___K28_5___D___K28_5
+function bit eth_decoder::os_check(string os_name , cg_struct_t cg_struct = cg_struct_current);
+   return os_convert(os_name) == cg_struct.cg_name;   
+endfunction // os_check
 
-function bit eth_decoder::check_end___K28_5___D21_5___D0_0();
-endfunction // check_end___K28_5___D21_5___D0_0
+function string eth_decoder::os_convert(string os_name);
+   case(os_name)
+     "/S/": os_convert = "K27_7";
+     "/T/": os_convert = "K29_7";
+     "/R/": os_convert = "K23_7";
+     default: `uvm_fatal("ETH_DECODER" , "Ordered set is not defined")
+   endcase // case (os_name)   
+endfunction // os_convert
+  
+function bit eth_decoder::check_end(string cg_name_a[3]);
+   int indx = 0;
+   
+   check_end = 1;   
+   do begin
+      if(!uvm_re_match("\/.*\/" , cg_name_a[indx])) begin
+	 if(cg_name_a[indx] == "/D/")
+	   check_end = (cg_struct_q[indx].cg_type == DATA);
+	 else 
+	   check_end = os_check(cg_name_a[indx] , cg_struct_q[indx]);
+      end
+      else
+	check_end = cg_check_name(cg_name_a[indx] , cg_struct_q[indx]);	 
+      indx++;
+   end
+   while(indx < 3 && check_end);
+         
+endfunction // check_end
 
-function bit eth_decoder::check_end___K28_5___D2_2___D0_0();
-endfunction // check_end___K28_5___D2_2___D0_0
 
-function bit eth_decoder::check_end___T___R___K28_5();
-endfunction // check_end___T___R___K28_5
-
-function bit eth_decoder::check_end___T___R___R();
-endfunction // check_end___T___R___R
-
-function bit eth_decoder::check_end___R___R___R();
-endfunction // check_end___R___R___R
-
-function bit eth_decoder::check_end___R___R___S();
-endfunction // check_end___R___R___S
-
-function bit eth_decoder::check_end___R___R___K28_5();
-endfunction // check_end___R___R___K28_5
-
-///////////////////////////////////////////////
-// check ordered set functions
-function bit eth_decoder::is_S_ordered_set();
-endfunction // is_S_ordered_set
-
-function bit eth_decoder::is_R_ordered_set();
-endfunction // is_R_ordered_set
-
-function void eth_decoder::print_code_group();
-
+function void eth_decoder::cg_print(cg_struct_t cg_struct = cg_struct_current);
+   
    print_struct_t print_struct;   
    footer_struct_t footer_struct;
 
-   print_struct.header_s = "rx_code_group";
+   print_struct.header_s = "rx_cg";
    
    footer_struct.footer_name_s = "CRD_RX";
    footer_struct.footer_val_s = CRD_RX.name();
    print_struct.footer_q.push_back(footer_struct);
 
    footer_struct.footer_name_s = "bin_val";
-   footer_struct.footer_val_s = $sformatf("10'b%6b_%4b" , current_code_group[0:5] , current_code_group[6:9]);
+   footer_struct.footer_val_s = $sformatf("10'b%6b_%4b" , cg_struct.cg[0:5] , cg_struct.cg[6:9]);
    print_struct.footer_q.push_back(footer_struct);
 
-   footer_struct.footer_name_s = "code_group_type";
-   if(is_data)
-     footer_struct.footer_val_s = "DATA";
-   else if(is_special)
-     footer_struct.footer_val_s = "SPECIAL";
-   else
-     footer_struct.footer_val_s = "INVALID";
+   footer_struct.footer_name_s = "cg_type";
+   footer_struct.footer_val_s = cg_struct.cg_type.name();   
    print_struct.footer_q.push_back(footer_struct);
 
-   footer_struct.footer_name_s = "code_group_name";
-   if(is_data || is_special)
-     footer_struct.footer_val_s = code_group_struct.code_group_name;
-   else
-     footer_struct.footer_val_s = "INVALID";
+   footer_struct.footer_name_s = "cg_name";
+   footer_struct.footer_val_s = cg_struct.cg_name;
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "is_comma";
+   footer_struct.footer_val_s = $sformatf("%0d" , cg_struct.comma);
    print_struct.footer_q.push_back(footer_struct);
 
    msg_print.print(print_struct);   
 
-endfunction // print_code_group
-
-
+endfunction // cg_print

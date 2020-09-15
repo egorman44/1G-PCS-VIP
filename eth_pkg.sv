@@ -8,6 +8,7 @@ package eth_pkg;
 
    typedef enum bit{ FALSE = 1'b0 , TRUE = 1'b1}boolen_t;
    typedef enum bit{ NEGATIVE = 1'b0 , POSITIVE = 1'b1} crd_t;
+   typedef enum {DATA , SPECIAL, INVALID} cg_type_t;
    typedef enum bit{ EVEN = 1'b1, ODD = 1'b0} parity_t;
 
    virtual class xmit_t_wrap;
@@ -19,17 +20,19 @@ package eth_pkg;
    endclass // rudi_t_wrap
       
    typedef bit [7:0] octet_t;
-   typedef bit [0:9] code_group_t;
+   typedef bit [0:9] cg_t;
    
    // PUDI message sends by PMA receive process
    typedef struct    {
-      code_group_t code_group;
-      octet_t octet;
-      string 	     code_group_name;
-   } code_group_struct_t;
+      cg_t cg;
+      cg_type_t cg_type;
+      octet_t octet;      
+      string  cg_name;
+      bit     comma;
+   } cg_struct_t;
 
    // Auxilary type to allow nested associative arrays
-   typedef code_group_struct_t decode_table_t[code_group_t];
+   typedef octet_t decode_table_t[cg_t];
    
    typedef struct    packed{
       crd_t crd;

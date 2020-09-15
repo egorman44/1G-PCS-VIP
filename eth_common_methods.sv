@@ -3,12 +3,9 @@
  `define _ETH_COMMON_METHODS_
 
 class eth_common_methods extends uvm_object;
-
- `include "data_8b10b.sv"
- `include "spec_8b10b.sv"
    
    virtual eth_if vif;
-   boolen_t sync_status;
+   bit sync_status;
 
    eth_decoder decoder;
    message_print msg_print;
@@ -25,16 +22,15 @@ class eth_common_methods extends uvm_object;
    logic [7:0] RXD;
    
    logic [15:0] rx_config_reg;
-   bit 		carrier_detect;
 
-   xmit_t_wrap::xmit_t xmit;
+   xmit_t_wrap::xmit_t xmit = xmit_t_wrap::DATA;
    //////////////////
    
    `uvm_object_utils_begin(eth_common_methods)
    `uvm_object_utils_end
 
    extern function new(string name = "eth_common_methods");
-
+   
    extern task pma_receive_process();
    extern task pcs_synchronization_process();
    extern task pcs_receive_process();
@@ -42,8 +38,8 @@ class eth_common_methods extends uvm_object;
    extern function void print_sm_state(string state_s);
    extern function void print_rx_rcv_state(rx_sync_sm_st_t rx_sync_sm_st);
 
-   extern function boolen_t check_comma(logic [0:6] comma_try);
    extern function bit is_cggood(bit rx_even);   
+   extern function bit check_comma(cg_t cg);
    
 endclass // eth_common_methods
 
@@ -60,28 +56,27 @@ endfunction: new
 task eth_common_methods::pcs_receive_process();
    
    rx_receive_sm_st_t rx_receive_sm_st;
-   boolen_t receiving;   
+   bit receiving;   
 
    forever begin
 
       @SUDI_e;      
 
       `uvm_info("ETH_COMMON" , $sformatf("SUDI event has occured"), UVM_FULL);
+            
+      if(!sync_status)
+	rx_receive_sm_st = LINK_FAILED_st;
       
-
       if(vif.mr_main_reset == 1'b1)
 	rx_receive_sm_st = WAIT_FOR_K_st;
-      
-      if(sync_status == FALSE)
-	rx_receive_sm_st = LINK_FAILED_st;
       
       case(rx_receive_sm_st)
 	
   	LINK_FAILED_st: begin
 	   if(xmit != xmit_t_wrap::DATA)
-	     decoder.RUDI_set(rudi_t_wrap::INVALID);
-	   if(receiving == TRUE) begin
-	      receiving = FALSE;
+	     //decoder.RUDI_set(rudi_t_wrap::INVALID);
+	   if(receiving) begin
+	      receiving = 0;
 	      RX_ER = '1;
 	   end
 	   else begin
@@ -92,91 +87,100 @@ task eth_common_methods::pcs_receive_process();
 	end
 	
 	WAIT_FOR_K_st: begin
-	   receiving = FALSE;
+	   receiving = '0;
 	   RX_DV = '0;
 	   RX_ER = '0;
-	   `uvm_info("ETH_COMMON" , $sformatf("SUDI_is_K28_5 : %b \n SUDI_is_rx_even : %b " , decoder.SUDI_is_K28_5() , decoder.SUDI_is_rx_even) , UVM_FULL)
- 	   if(decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even()) begin
+ 	   if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even()) begin
 	      rx_receive_sm_st = RX_K_st;
 	   end
 	end
 	
 	RX_K_st: begin
-	   receiving = FALSE;
+	   receiving = '0;
 	   RX_DV = '0;
 	   RX_ER = '0;
-	   if(decoder.SUDI_is_D21_5() || decoder.SUDI_is_D2_2)
+	   if(decoder.cg_check_name("D21_5") || decoder.cg_check_name("D2_2"))
 	     rx_receive_sm_st = RX_CB_st;
-	   else if(decoder.SUDI_is_data == FALSE && xmit != xmit_t_wrap::DATA)
+	   else if(!decoder.cg_check_type(DATA) && xmit != xmit_t_wrap::DATA)
 	     rx_receive_sm_st = RX_INVALID_st;
-	   else if((xmit != xmit_t_wrap::DATA && (decoder.SUDI_is_data == TRUE && !decoder.SUDI_is_D21_5() && !decoder.SUDI_is_D2_2())) || (xmit == xmit_t_wrap::DATA && (!decoder.SUDI_is_D21_5() && !decoder.SUDI_is_D2_2())))
+	   else if((xmit != xmit_t_wrap::DATA && (decoder.cg_check_type(DATA) && !decoder.cg_check_name("D21_5") && !decoder.cg_check_name("D2_2"))) || (xmit == xmit_t_wrap::DATA && (!decoder.cg_check_name("D21_5") && !decoder.cg_check_name("D2_2"))))
 	     rx_receive_sm_st = IDLE_D_st;
 	end // case: RX_K_st
 	
 	RX_CB_st: begin
-	   receiving = FALSE;
+	   receiving = '0;
 	   RX_DV = '0;
 	   RX_ER = '0;
-	   if(decoder.SUDI_is_data == TRUE)
+	   if(decoder.cg_check_type(DATA))
 	     rx_receive_sm_st = RX_CC_st;
 	   else
 	     rx_receive_sm_st = RX_INVALID_st;	     
 	end
 
 	RX_CC_st: begin
-	   rx_config_reg[7:0] = decoder.DECODE();
-	   if(decoder.SUDI_is_data == TRUE)
+	   rx_config_reg[7:0] = decoder.cg_decode();
+	   if(decoder.cg_check_type(DATA))
 	     rx_receive_sm_st = RX_CD_st;
 	   else
 	     rx_receive_sm_st = RX_INVALID_st;
 	end
 
 	RX_CD_st: begin
-	   rx_config_reg[15:8] = decoder.DECODE();
-	   decoder.RUDI_set(rudi_t_wrap::CONFIG);	      
-	   if(decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even())
+	   rx_config_reg[15:8] = decoder.cg_decode();
+	   //decoder.RUDI_set(rudi_t_wrap::CONFIG);	      
+	   if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
 	     rx_receive_sm_st = RX_K_st;
-	   else if(!decoder.SUDI_is_K28_5() || decoder.SUDI_is_rx_even())
+	   else if(!decoder.cg_check_name("K28_5") || decoder.SUDI_is_rx_even())
 	     rx_receive_sm_st = RX_INVALID_st;
 	end
 
 	IDLE_D_st: begin
-	   receiving = FALSE;
+	   receiving = '0;
 	   RX_DV = '0;
 	   RX_ER = '0;
-	   decoder.RUDI_set(rudi_t_wrap::IDLE);	      
-	   if(!decoder.SUDI_is_K28_5() && xmit != xmit_t_wrap::DATA)
-	     rx_receive_sm_st = RX_INVALID_st;
-	   else if(xmit != xmit_t_wrap::DATA && carrier_detect == TRUE)
-	     rx_receive_sm_st = CARRIER_DETECT_st;
-	   else if(xmit != xmit_t_wrap::DATA && carrier_detect == FALSE || decoder.SUDI_is_K28_5())
+	   //decoder.RUDI_set(rudi_t_wrap::IDLE);	      
+	   if(xmit == xmit_t_wrap::DATA && decoder.carrier_detect()) begin
+	      // CARRIER_DETECT state
+	      //rx_receive_sm_st = CARRIER_DETECT_st;
+	      receiving = '1;
+	      if(decoder.os_check("/S/"))
+	        rx_receive_sm_st = START_OF_PACKET_st;
+	      else 
+	        rx_receive_sm_st = FALSE_CARRIER_st;
+	   end
+	   else if(xmit == xmit_t_wrap::DATA && decoder.carrier_detect() || decoder.cg_check_name("K28_5"))
 	     rx_receive_sm_st = RX_K_st;
+	   
+	   //if(!decoder.cg_check_name("K28_5") && xmit != xmit_t_wrap::DATA)
+	   else
+	      rx_receive_sm_st = RX_INVALID_st;
 	end // case: IDLE_D_st
-
-	CARRIER_DETECT_st: begin
-	   receiving = TRUE;
-	   if(decoder.is_S_ordered_set())
-	     rx_receive_sm_st = START_OF_PACKET_st;
-	   else 
-	     rx_receive_sm_st = FALSE_CARRIER_st;
-	end
+	
+	//CARRIER_DETECT_st: begin
+	//   receiving = TRUE;
+	//   if(decoder.os_check("/S/"))
+	//     rx_receive_sm_st = START_OF_PACKET_st;
+	//   else 
+	//     rx_receive_sm_st = FALSE_CARRIER_st;
+	//end
 
 	FALSE_CARRIER_st: begin
 	   RX_ER = '1;
 	   RXD = 8'b0000_1110;
-	   if(decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even())
+	   if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
 	     rx_receive_sm_st = RX_K_st;
 	end
 
 	RX_INVALID_st: begin
 	   if(xmit == xmit_t_wrap::CONFIG)
-	     decoder.RUDI_set(rudi_t_wrap::INVALID);
+	     //decoder.RUDI_set(rudi_t_wrap::INVALID);
+	     ;	   
 	   else if(xmit == xmit_t_wrap::DATA)
-	     receiving = TRUE;
-	   if(decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even())
+	     receiving = '1;
+	   if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
 	     rx_receive_sm_st = RX_K_st;
 	   else
-	     if( !decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even())
+	     if( !decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
 	       rx_receive_sm_st = WAIT_FOR_K_st;
 	end // case: RX_INVALID_st
 	
@@ -190,34 +194,41 @@ task eth_common_methods::pcs_receive_process();
 	// In receive state doesn't wait for a new SUDI message, so we
 	// need to inherite one more case statement to handle this situation
 	RECEIVE_st: begin
-	   if(decoder.check_end___K28_5___D___K28_5() || decoder.check_end___K28_5___D21_5___D0_0() || decoder.check_end___K28_5___D2_2___D0_0() && decoder.SUDI_is_rx_even())
+
+	   if(decoder.check_end('{"K28_5" , "/D/"  , "K28_5"}) || 
+	      decoder.check_end('{"K28_5" , "D21_5", "D0_0"}) || 
+	      decoder.check_end('{"K28_5" , "D2_2" , "D0_0"}) && 
+	      decoder.SUDI_is_rx_even())
+	     
 	     rx_receive_sm_st = EARLY_END_st;
-	   else if(decoder.check_end___T___R___K28_5() && decoder.SUDI_is_rx_even())
+	   else if(decoder.check_end('{"/T/" , "/R/" , "K28_5"}) && decoder.SUDI_is_rx_even())
 	     rx_receive_sm_st = TRI_RRI_st;
-	   else if(decoder.check_end___T___R___R())
+	   else if(decoder.check_end('{"/T/" , "/R/" , "/R/"}))
 	     rx_receive_sm_st = TRR_EXTEND_st;
-	   else if(decoder.check_end___R___R___R())
+	   else if(decoder.check_end('{"/R/" , "/R/" , "/R/"}))
 	     rx_receive_sm_st = EARLY_END_EXT_st;
-	   else if(decoder.SUDI_is_data == TRUE)
+	   else if(decoder.cg_check_type(DATA))
 	     rx_receive_sm_st = RX_DATA_st;
 	   else
 	     rx_receive_sm_st = RX_DATA_ERROR_st;
+
+	   print_sm_state({"RX RCV SM : " , rx_receive_sm_st.name()});
 	   
 	   case(rx_receive_sm_st)
 	     
 	     EARLY_END_st: begin
 		RX_ER = '1;
-		if(!decoder.SUDI_is_D21_5() && !decoder.SUDI_is_D2_2())
+		if(!decoder.cg_check_name("D21_5") && !decoder.cg_check_name("D2_2"))
 		  rx_receive_sm_st = IDLE_D_st;
-		else if(decoder.SUDI_is_D21_5() || decoder.SUDI_is_D2_2)
+		else if(decoder.cg_check_name("D21_5") || decoder.cg_check_name("D2_2"))
 		  rx_receive_sm_st = RX_CB_st;
 	     end
 	     
 	     TRI_RRI_st: begin
-		receiving = FALSE;
+		receiving = '1;
 		RX_DV = '0;
 		RX_ER = '0;
-		if(decoder.SUDI_is_K28_5())
+		if(decoder.cg_check_name("K28_5"))
 		  rx_receive_sm_st = RX_K_st;
 	     end
 	     
@@ -235,7 +246,7 @@ task eth_common_methods::pcs_receive_process();
 	     
 	     RX_DATA_st: begin
 		RX_ER = '0;
-		RXD = decoder.DECODE();
+		RXD = decoder.cg_decode();
 		rx_receive_sm_st = RECEIVE_st;
 	     end
 	     
@@ -252,11 +263,11 @@ task eth_common_methods::pcs_receive_process();
 	end // case: RECEIVE_st
 	
 	EPD2_CHECK_END_st: begin
-	   if(decoder.check_end___R___R___R())
+	   if(decoder.check_end('{"/R/" , "/R/" , "/R/"}))
 	     rx_receive_sm_st = TRR_EXTEND_st;
-	   else if(decoder.check_end___R___R___K28_5() && decoder.SUDI_is_rx_even())
+	   else if(decoder.check_end('{"/R/" , "/R/" , "K28_5"}) && decoder.SUDI_is_rx_even())
 	     rx_receive_sm_st = TRI_RRI_st;
-	   else if(decoder.check_end___R___R___S())
+	   else if(decoder.check_end('{"/R/" , "/R/" , "/S/"}))
 	     rx_receive_sm_st = PACKET_BURST_RPS_st;
 	   else
 	     rx_receive_sm_st = EXTEND_ERR_st;
@@ -264,10 +275,10 @@ task eth_common_methods::pcs_receive_process();
 	   case(rx_receive_sm_st)
 	     
 	     TRI_RRI_st: begin
-		receiving = FALSE;
+		receiving = '1;
 		RX_DV = '0;
 		RX_ER = '0;
-		if(decoder.SUDI_is_K28_5())
+		if(decoder.cg_check_name("K28_5"))
 		  rx_receive_sm_st = RX_K_st;
 	     end
 	     
@@ -281,18 +292,18 @@ task eth_common_methods::pcs_receive_process();
 	     PACKET_BURST_RPS_st: begin
 		RX_DV = '0;
 		RXD = 8'b0000_1111;
-		if(decoder.is_S_ordered_set())
+		if(decoder.os_check("/S/"))
 		  rx_receive_sm_st = START_OF_PACKET_st;
 	     end
 
 	     EXTEND_ERR_st: begin
 		RX_DV = '0;
 		RXD = 8'b0000_1111;
-		if(decoder.is_S_ordered_set())
+		if(decoder.os_check("/S/"))
 		  rx_receive_sm_st = START_OF_PACKET_st;
-		else if(decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even())
+		else if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
 		  rx_receive_sm_st = RX_K_st;
-		else if(decoder.is_S_ordered_set() && !(decoder.SUDI_is_K28_5() && decoder.SUDI_is_rx_even()))
+		else if(decoder.os_check("/S/") && !(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even()))
 		  rx_receive_sm_st = EPD2_CHECK_END_st;
 	     end	      
 
@@ -336,48 +347,48 @@ task eth_common_methods::pcs_synchronization_process();
       case(rx_sync_sm_st)
 	
 	LOSS_OF_SYNC_st: begin
-	   if(decoder.PUDI_is_comma() && (vif.signal_detect == 1'b1 || vif.mr_loopback == 1'b1))
+	   if(decoder.cg_is_comma() && (vif.signal_detect == 1'b1 || vif.mr_loopback == 1'b1))
 	     rx_sync_sm_st = COMMA_DETECT_1_st;
 	   else
 	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	end
 	
 	COMMA_DETECT_1_st: begin
-	   if(decoder.PUDI_is_data())
+	   if(decoder.cg_check_type(DATA))
 	     rx_sync_sm_st = ACQUIRE_SYNC_1_st;
 	   else
 	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	end
 	
 	ACQUIRE_SYNC_1_st: begin
-	   if(rx_even == FALSE && decoder.PUDI_is_comma())
+	   if(rx_even == FALSE && decoder.cg_is_comma())
 	     rx_sync_sm_st = COMMA_DETECT_2_st;
-	   else if(!decoder.PUDI_is_invalid() && !decoder.PUDI_is_comma())
+	   else if(!decoder.cg_check_type(INVALID) && !decoder.cg_is_comma())
 	     rx_sync_sm_st = ACQUIRE_SYNC_1_st;
 	   else
 	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	end
 
 	COMMA_DETECT_2_st: begin
-	   if(decoder.SUDI_is_data())
+	   if(decoder.cg_check_type(DATA))
 	     rx_sync_sm_st = ACQUIRE_SYNC_2_st;
 	   else
 	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
 	end
 
 	ACQUIRE_SYNC_2_st: begin
-	   `uvm_info("ETH_COMMON" , $sformatf("is_comma = %0b , is_invalid = %0b" , decoder.PUDI_is_invalid , decoder.PUDI_is_comma) , UVM_FULL)
+	   `uvm_info("ETH_COMMON" , $sformatf("is_comma = %0b , is_invalid = %0b" , decoder.cg_check_type(INVALID) , decoder.cg_is_comma()) , UVM_FULL)
 	   
-	   if(!rx_even && decoder.PUDI_is_comma())
+	   if(!rx_even && decoder.cg_is_comma())
 	     rx_sync_sm_st = COMMA_DETECT_3_st;
-	   else if(!decoder.PUDI_is_invalid() && !decoder.PUDI_is_comma())
+	   else if(!decoder.cg_check_type(INVALID) && !decoder.cg_is_comma())
 	      rx_sync_sm_st = ACQUIRE_SYNC_2_st;
 	   else
 	      rx_sync_sm_st = LOSS_OF_SYNC_st;
 	end
 
 	COMMA_DETECT_3_st: begin
-	   if(decoder.PUDI_is_data())
+	   if(decoder.cg_check_type(DATA))
 	     rx_sync_sm_st = SYNC_ACQUIRED_1_st;
 	   else
 	     rx_sync_sm_st = LOSS_OF_SYNC_st;
@@ -441,7 +452,7 @@ task eth_common_methods::pcs_synchronization_process();
       case(rx_sync_sm_st)
 	
 	LOSS_OF_SYNC_st: begin
-	   sync_status = FALSE;	   
+	   sync_status = 0;	   
 	   rx_even = ~rx_even;
 	end
 	
@@ -466,7 +477,7 @@ task eth_common_methods::pcs_synchronization_process();
 	end
 	
 	SYNC_ACQUIRED_1_st: begin
-	   sync_status = TRUE;
+	   sync_status = 1;
 	   rx_even = ~rx_even;
 	end
 
@@ -521,7 +532,7 @@ function bit eth_common_methods::is_cggood
     );
    bit 	    cggood;
    
-   cggood = !((decoder.PUDI_is_comma() && rx_even == EVEN) || decoder.PUDI_is_invalid());
+   cggood = !((decoder.cg_is_comma() && rx_even == EVEN) || decoder.cg_check_type(INVALID));
    return cggood;   
 endfunction // is_cggood
 
@@ -560,53 +571,56 @@ endfunction // print_rx_rcv_state
 // 36.3.2.3 PMA receive function and 3.3.2.4 Code-group alignment process
 
 task eth_common_methods::pma_receive_process();
-   
+
    logic [0:9] ten_bits;
-   logic [0:39] four_ten_bits;
+   logic [0:19] two_ten_bits;
    int 		comma_position = '0;
-   
+   int 		cg_counter = '0;
+      
    bit 		is_comma = 1'b0;
    
    forever begin      
-      vif.read(ten_bits);
-      four_ten_bits = {four_ten_bits[10:39],ten_bits};
+      vif.read(ten_bits); 
+      two_ten_bits = {two_ten_bits[10:19] , ten_bits};
       
       `uvm_info("ETH_COMMON" , $sformatf("Received 10-bit: 0b%10b " , ten_bits) , UVM_FULL)
-      `uvm_info("ETH_COMMON" , $sformatf("Four 10-bit: 0b%40b " , four_ten_bits) , UVM_FULL)
+      `uvm_info("ETH_COMMON" , $sformatf("Two 10-bit: 0b%20b " , two_ten_bits) , UVM_FULL)
 
       is_comma = 1'b0;
       
       if(EN_CDEN == 1'b1) begin	
 	 for(int i = 0; i < 10; ++i) begin
-	    //`uvm_info("ETH_COMMON" , $sformatf("Comma try: %7b" , four_ten_bits[i+:7]) , UVM_FULL)
-	    if(check_comma(four_ten_bits[i+:7])) begin
+	    //`uvm_info("ETH_COMMON" , $sformatf("Comma try: %7b" , two_ten_bits[i+:7]) , UVM_FULL)
+	    if(check_comma(two_ten_bits[i+:10])) begin
 	       comma_position = i;
 	       is_comma = 1'b1;
-	       `uvm_info("ETH_COMMON" , $sformatf("Comma detected in pos %0d %7b" , comma_position , four_ten_bits[i+:7]) , UVM_FULL)
+	       `uvm_info("ETH_COMMON" , $sformatf("Comma detected in pos %0d %7b" , comma_position , two_ten_bits[i+:7]) , UVM_FULL)
 	    end
 	 end
       end
       else begin
-	 is_comma = check_comma(four_ten_bits[comma_position+:7]);
+	 is_comma = check_comma(two_ten_bits[comma_position+:10]);
       end // else: !if(is_comma == FALSE)
-
-      // Put all input arguments into decoder and calculate all
-      // auxilary signals
       
-      decoder.PUDI_set_code_group(four_ten_bits[comma_position+:30]);
-      decoder.PUDI_set_comma(is_comma);
-      decoder.PUDI_calc();
+      decoder.cg_set(two_ten_bits[comma_position+:10], is_comma);
+      
 
-      ->PUDI_e;
-      `uvm_info("ETH_COMMON" , $sformatf("PUDI has triggered ") , UVM_FULL)
+      // Enable sync process only when three code-groups were received
+      if(cg_counter != 2)
+	++cg_counter;
+      else
+	->PUDI_e;
+      
+      //`uvm_info("ETH_COMMON" , $sformatf("PUDI has triggered ") , UVM_FULL)
+      
    end   
 endtask // counter_event
 
-function boolen_t eth_common_methods::check_comma(logic [0:6] comma_try);
-   case(comma_try[0:6])
-     7'b0011111 : check_comma = TRUE;
-     7'b1100000 : check_comma = TRUE;
-     default: check_comma = FALSE;	
+function bit eth_common_methods::check_comma(cg_t cg);
+   case(cg[0:6])
+     7'b0011111 : check_comma = 1;
+     7'b1100000 : check_comma = 1;
+     default: check_comma = 0;	
    endcase
 endfunction // check_comma   
 
