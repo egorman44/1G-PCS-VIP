@@ -21,11 +21,13 @@ class eth_decoder extends uvm_object;
 
    // code group that is used for all calculations at
    // a current time slot. The current code-group is located 
-   // in the cg_struct_q[2] item, since set_cg() function 
-   // uses pysh_front() to shift items into the queue
+   // in the cg_struct_q[0] item, since set_cg() function 
+   // uses push_back() to shift items into the queue
    
    cg_struct_t cg_struct_current;
-   
+
+   // Shows that queue pipe is full and
+   bit queue_full;
 
    // current value of RX running disparity
    crd_t CRD_RX;
@@ -37,30 +39,29 @@ class eth_decoder extends uvm_object;
    
    extern function new(string name = "eth_decoder");
 
-   // Decode methods
-   extern function cg_struct_t decode_8b10b(cg_t cg , crd_t CRD, bit comma);
-   extern function void crd_rx_rules(cg_t cg, ref crd_t crd);
-   extern function bit carrier_detect();
+   //////////////////////////////////////////////
+   // DECODER API FUNCTIONS
+   //////////////////////////////////////////////
    
-   // Print th content
-   extern function void cg_print(cg_struct_t cg_struct = cg_struct_current);
-   
-   // Setter methods
-   extern function void cg_set(cg_t cg, bit comma);   
-   
-   // Getter methods
-   //   extern function bit PUDI_is_comma();
-
+   extern function void cg_set(cg_t cg, bit comma);
    extern function bit cg_check_type(cg_type_t cg_type);
    extern function bit cg_check_name(string cg_name, cg_struct_t cg_struct = cg_struct_current);
    extern function bit cg_is_comma();
-   extern function octet_t cg_decode();
-   
+   extern function octet_t cg_decode();   
    extern function bit check_end(string cg_name_a[3]);
-
+   extern function void check_end_print();
    extern function bit SUDI_is_rx_even();
    extern function void SUDI_set_parity(bit rx_even);
-
+   extern function bit decoder_ready();
+   
+   //////////////////////////////////////////////
+   // DECODER INTERNAL FUNCITONS
+   //////////////////////////////////////////////
+   
+   extern function cg_struct_t decode_8b10b(cg_t cg , crd_t CRD, bit comma);
+   extern function void crd_rx_rules(cg_t cg, ref crd_t crd);
+   extern function bit carrier_detect();  
+   extern function void cg_print(cg_struct_t cg_struct = cg_struct_current);
    extern function string os_convert(string os_name);
    extern function bit os_check(string os_name , cg_struct_t cg_struct = cg_struct_current);
    
@@ -162,15 +163,20 @@ endfunction // crd_rx_rules
 ///////////////////////////////////////////
 
 function void eth_decoder::cg_set(cg_t cg, bit comma);
-   
-   cg_struct_q.push_front(decode_8b10b(cg, CRD_RX, comma));
-   if(cg_struct_q.size() > 2) begin
-      cg_struct_current = cg_struct_q[2];
-      cg_print();      
+
+   cg_struct_q.push_back(decode_8b10b(cg, CRD_RX, comma));
+   if(cg_struct_q.size() >= 3) begin
+      if(cg_struct_q.size() == 4)
+	cg_struct_q.delete(0);
+      queue_full = 1;      
+      cg_struct_current = cg_struct_q[0];
+      cg_print();
    end
-   if(cg_struct_q.size() == 4)
-     cg_struct_q.delete(3); 
-   crd_rx_rules(cg , CRD_RX);   
+   else begin
+      queue_full = 0;
+   end
+   crd_rx_rules(cg, CRD_RX);
+   
 endfunction // PUDI_set_comma
 
 ///////////////////////////////////////////
@@ -201,6 +207,10 @@ function octet_t eth_decoder::cg_decode();
    cg_decode = cg_struct_current.octet;   
 endfunction // cg_decode
 
+function bit eth_decoder::decoder_ready();
+   return queue_full;   
+endfunction // decoder_ready
+
 ///////////////////////////////////////////////
 // check_end functions implementation
 
@@ -213,36 +223,57 @@ function string eth_decoder::os_convert(string os_name);
      "/S/": os_convert = "K27_7";
      "/T/": os_convert = "K29_7";
      "/R/": os_convert = "K23_7";
-     default: `uvm_fatal("ETH_DECODER" , "Ordered set is not defined")
+     default: `uvm_fatal("ETH_DECODER" , $sformatf("Ordered set %0s is not defined" , os_name))
    endcase // case (os_name)   
 endfunction // os_convert
   
 function bit eth_decoder::check_end(string cg_name_a[3]);
    int indx = 0;
+   check_end = 1;
+
+   //check_end_print();
    
-   check_end = 1;   
    do begin
-      if(!uvm_re_match("\/.*\/" , cg_name_a[indx])) begin
+      if(!uvm_re_match("\/\/[A-Z]\/\/" , cg_name_a[indx])) begin
+	 //`uvm_info("ETH_DECODER" , $sformatf("ORDERED SET: %0s" , cg_name_a[indx]) , UVM_FULL)
 	 if(cg_name_a[indx] == "/D/")
 	   check_end = (cg_struct_q[indx].cg_type == DATA);
 	 else 
 	   check_end = os_check(cg_name_a[indx] , cg_struct_q[indx]);
       end
       else
-	check_end = cg_check_name(cg_name_a[indx] , cg_struct_q[indx]);	 
+	check_end = cg_check_name(cg_name_a[indx] , cg_struct_q[indx]);
+      `uvm_info("ETH_DECODER" , $sformatf("ORDERED SET: %0s CODE_GT: %0s" , cg_name_a[indx] , cg_struct_q[indx].cg_name) , UVM_FULL)
       indx++;
    end
    while(indx < 3 && check_end);
          
 endfunction // check_end
 
+function void eth_decoder::check_end_print();
 
+   print_struct_t print_struct;   
+   footer_struct_t footer_struct;
+
+   print_struct.header_s = "CHECK END(THREE LAST CODE GROUP)";
+
+   foreach(cg_struct_q[indx]) begin
+      footer_struct.footer_name_s = $sformatf("CG(t+%0d)" , indx);
+      footer_struct.footer_val_s = cg_struct_q[indx].cg_name;
+      print_struct.footer_q.push_back(footer_struct);
+   end
+
+   msg_print.print(print_struct);
+   
+endfunction // check_end_print
+
+   
 function void eth_decoder::cg_print(cg_struct_t cg_struct = cg_struct_current);
    
    print_struct_t print_struct;   
    footer_struct_t footer_struct;
 
-   print_struct.header_s = "rx_cg";
+   print_struct.header_s = "RX CODE GROUP";
    
    footer_struct.footer_name_s = "CRD_RX";
    footer_struct.footer_val_s = CRD_RX.name();

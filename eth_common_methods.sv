@@ -10,6 +10,9 @@ class eth_common_methods extends uvm_object;
    eth_decoder decoder;
    message_print msg_print;
    event   SUDI_e, PUDI_e;
+
+   eth_seq_item eth_seq_item_h;
+   uvm_analysis_port #(eth_seq_item) analysis_port;
    
    //////////////////
    // TODO: ANALYZE THIS SIGNALS
@@ -22,6 +25,7 @@ class eth_common_methods extends uvm_object;
    logic [7:0] RXD;
    
    logic [15:0] rx_config_reg;
+   bit 		receiving;    // Was inside pcs_receive_process()
 
    xmit_t_wrap::xmit_t xmit = xmit_t_wrap::DATA;
    //////////////////
@@ -34,10 +38,13 @@ class eth_common_methods extends uvm_object;
    extern task pma_receive_process();
    extern task pcs_synchronization_process();
    extern task pcs_receive_process();
+   extern function void write_an();
+   extern function void resolve_inner_state(ref rx_receive_sm_st_t rx_receive_sm_st);
    
    extern function void print_sm_state(string state_s);
    extern function void print_rx_rcv_state(rx_sync_sm_st_t rx_sync_sm_st);
 
+   
    extern function bit is_cggood(bit rx_even);   
    extern function bit check_comma(cg_t cg);
    
@@ -56,8 +63,7 @@ endfunction: new
 task eth_common_methods::pcs_receive_process();
    
    rx_receive_sm_st_t rx_receive_sm_st;
-   bit receiving;   
-
+   
    forever begin
 
       @SUDI_e;      
@@ -189,12 +195,15 @@ task eth_common_methods::pcs_receive_process();
 	   RX_ER = '0;
 	   RXD = 8'b0101_0101;
 	   rx_receive_sm_st = RECEIVE_st;
+	   eth_seq_item_h = eth_seq_item::type_id::create("eth_seq_item");
 	end
 
 	// In receive state doesn't wait for a new SUDI message, so we
 	// need to inherite one more case statement to handle this situation
 	RECEIVE_st: begin
 
+	   decoder.check_end_print();
+	   
 	   if(decoder.check_end('{"K28_5" , "/D/"  , "K28_5"}) || 
 	      decoder.check_end('{"K28_5" , "D21_5", "D0_0"}) || 
 	      decoder.check_end('{"K28_5" , "D2_2" , "D0_0"}) && 
@@ -213,52 +222,7 @@ task eth_common_methods::pcs_receive_process();
 	     rx_receive_sm_st = RX_DATA_ERROR_st;
 
 	   print_sm_state({"RX RCV SM : " , rx_receive_sm_st.name()});
-	   
-	   case(rx_receive_sm_st)
-	     
-	     EARLY_END_st: begin
-		RX_ER = '1;
-		if(!decoder.cg_check_name("D21_5") && !decoder.cg_check_name("D2_2"))
-		  rx_receive_sm_st = IDLE_D_st;
-		else if(decoder.cg_check_name("D21_5") || decoder.cg_check_name("D2_2"))
-		  rx_receive_sm_st = RX_CB_st;
-	     end
-	     
-	     TRI_RRI_st: begin
-		receiving = '1;
-		RX_DV = '0;
-		RX_ER = '0;
-		if(decoder.cg_check_name("K28_5"))
-		  rx_receive_sm_st = RX_K_st;
-	     end
-	     
-	     TRR_EXTEND_st: begin
-		RX_DV = '0;
-		RX_ER = '1;
-		RXD = 8'b0000_1111;
-		rx_receive_sm_st = EPD2_CHECK_END_st;
-	     end
-	     
-	     EARLY_END_EXT_st: begin
-		RX_ER = '1;
-		rx_receive_sm_st = EPD2_CHECK_END_st;
-	     end
-	     
-	     RX_DATA_st: begin
-		RX_ER = '0;
-		RXD = decoder.cg_decode();
-		rx_receive_sm_st = RECEIVE_st;
-	     end
-	     
-	     RX_DATA_ERROR_st: begin
-		RX_ER = '1;
-		rx_receive_sm_st = RECEIVE_st;
-	     end
-	     
-	     default:
-	       `uvm_fatal(get_type_name(),"Default state is prohibited")
-	     
-	   endcase // case (rx_receive_sm_st)
+	   resolve_inner_state(rx_receive_sm_st);
 	   
 	end // case: RECEIVE_st
 	
@@ -271,49 +235,13 @@ task eth_common_methods::pcs_receive_process();
 	     rx_receive_sm_st = PACKET_BURST_RPS_st;
 	   else
 	     rx_receive_sm_st = EXTEND_ERR_st;
+	   resolve_inner_state(rx_receive_sm_st);
 
-	   case(rx_receive_sm_st)
-	     
-	     TRI_RRI_st: begin
-		receiving = '1;
-		RX_DV = '0;
-		RX_ER = '0;
-		if(decoder.cg_check_name("K28_5"))
-		  rx_receive_sm_st = RX_K_st;
-	     end
-	     
-	     TRR_EXTEND_st: begin
-		RX_DV = '0;
-		RX_ER = '1;
-		RXD = 8'b0000_1111;
-		rx_receive_sm_st = EPD2_CHECK_END_st;
-	     end
-
-	     PACKET_BURST_RPS_st: begin
-		RX_DV = '0;
-		RXD = 8'b0000_1111;
-		if(decoder.os_check("/S/"))
-		  rx_receive_sm_st = START_OF_PACKET_st;
-	     end
-
-	     EXTEND_ERR_st: begin
-		RX_DV = '0;
-		RXD = 8'b0000_1111;
-		if(decoder.os_check("/S/"))
-		  rx_receive_sm_st = START_OF_PACKET_st;
-		else if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
-		  rx_receive_sm_st = RX_K_st;
-		else if(decoder.os_check("/S/") && !(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even()))
-		  rx_receive_sm_st = EPD2_CHECK_END_st;
-	     end	      
-
-	     default:
-	       `uvm_fatal(get_type_name(), "Receving SM failed state")
-	   endcase // case (rx_receive_sm_st)
-	end // else: !if(sync_status == FAIL)
-
+	end // case: EPD2_CHECK_END_st
+	
 	default:
-	  `uvm_fatal(get_type_name(), "Receving SM failed state")
+	  resolve_inner_state(rx_receive_sm_st);
+	
       endcase // case (rx_receive_sm_st)
 
       print_sm_state({"RX RCV SM : " , rx_receive_sm_st.name()});
@@ -321,6 +249,87 @@ task eth_common_methods::pcs_receive_process();
 end   
 
 endtask // receive
+
+function void eth_common_methods::write_an();
+   `uvm_info("ETH_COMMON" , eth_seq_item_h.convert2string() , UVM_LOW)
+   analysis_port.write(eth_seq_item_h);
+endfunction // write_an
+
+function void eth_common_methods::resolve_inner_state(ref rx_receive_sm_st_t rx_receive_sm_st);
+   
+   case(rx_receive_sm_st)
+     
+     EARLY_END_st: begin
+	RX_ER = '1;
+	if(!decoder.cg_check_name("D21_5") && !decoder.cg_check_name("D2_2"))
+	  rx_receive_sm_st = IDLE_D_st;
+	else if(decoder.cg_check_name("D21_5") || decoder.cg_check_name("D2_2"))
+	  rx_receive_sm_st = RX_CB_st;
+     end
+     
+     TRI_RRI_st: begin
+	receiving = '1;
+	RX_DV = '0;
+	RX_ER = '0;
+	if(decoder.cg_check_name("K28_5")) begin
+	   rx_receive_sm_st = RX_K_st;
+	   write_an();
+	end
+     end
+     
+     TRR_EXTEND_st: begin
+	RX_DV = '0;
+	RX_ER = '1;
+	RXD = 8'b0000_1111;
+	rx_receive_sm_st = EPD2_CHECK_END_st;
+     end
+     
+     EARLY_END_EXT_st: begin
+	RX_ER = '1;
+	rx_receive_sm_st = EPD2_CHECK_END_st;
+     end
+     
+     RX_DATA_st: begin
+	RX_ER = '0;
+	RXD = decoder.cg_decode();
+	rx_receive_sm_st = RECEIVE_st;
+	eth_seq_item_h.frame_an.push_back(decoder.cg_decode());
+     end
+     
+     RX_DATA_ERROR_st: begin
+	RX_ER = '1;
+	rx_receive_sm_st = RECEIVE_st;
+     end
+
+     PACKET_BURST_RPS_st: begin
+	RX_DV = 0;
+	RXD = 'b0000_1111;
+	if(decoder.os_check("/S/")) begin
+	   rx_receive_sm_st = START_OF_PACKET_st;
+	   write_an();
+	end
+     end
+
+     EXTEND_ERR_st: begin
+	RX_DV = '0;
+	RXD = 8'b0000_1111;
+	if(decoder.os_check("/S/")) begin
+	   rx_receive_sm_st = START_OF_PACKET_st;
+	   write_an();
+	end
+	else if(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even())
+	  rx_receive_sm_st = RX_K_st;
+	else if(decoder.os_check("/S/") && !(decoder.cg_check_name("K28_5") && decoder.SUDI_is_rx_even()))
+	  rx_receive_sm_st = EPD2_CHECK_END_st;
+     end	      
+	
+     default:
+       `uvm_fatal(get_type_name(),"Default state is prohibited")
+
+   endcase // case (rx_receive_sm_st)
+endfunction
+   
+
 
 //------------------------------------------------------------------------
 // 36.2.5.2.6 Synchronization
