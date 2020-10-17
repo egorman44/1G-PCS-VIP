@@ -35,6 +35,7 @@ class pcs_common_methods extends uvm_object;
 
    extern function bit os_to_octet(string os, ref octet_t octet);
    extern function bit cg_name_to_octet(string cg_name, ref octet_t octet);
+   extern function void get_os(ref cg_struct_t cg_struct);
    
 endclass // pcs_common_methods
 
@@ -65,6 +66,19 @@ function bit  pcs_common_methods::os_to_octet(string os, ref octet_t octet);
    endcase // case (os_name)
    return os_match;
 endfunction // os_to_octet
+
+function void pcs_common_methods::get_os(ref cg_struct_t cg_struct);
+   if(cg_struct.cg_type == SPECIAL) begin
+      case(cg_struct.octet)
+	8'hF7: cg_struct.os_name = "/R/";
+	8'hFB: cg_struct.os_name = "/S/";
+	8'hFD: cg_struct.os_name = "/T/";
+	8'hFE: cg_struct.os_name = "/V/";
+      endcase // case (cg_struct.octet)
+   end
+   else if(cg_struct.cg_type == DATA)
+     cg_struct.os_name = "/D/";
+endfunction // get_os     
   
 // 36.2.4.4 Running disparity rules
 function void pcs_common_methods::crd_rules( cg_t cg, ref crd_t crd);

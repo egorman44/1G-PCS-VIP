@@ -177,7 +177,6 @@ task pcs_rx_comp::pma_receive_process();
       if(cg_counter < 2)
 	++cg_counter;
       else begin
-	 os_set();
 	 print_cg(cg_struct_a[2]);
 	 pcs_rx_sync_sm();
 	 pcs_rx_rcv_sm();
@@ -410,36 +409,25 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      end
      
      WAIT_FOR_K_st: begin
-	receiving = 0;	
- 	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC && // cg_name("K28_5")
-	   rx_even)
-	   
+	receiving = 0;
+	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)	   
 	  rx_receive_sm_st = RX_K_st;
      end
      
      RX_K_st: begin
 	receiving = 0;
-	if(cg_struct_current.cg_type == DATA && 
-	   (cg_struct_current.octet == 8'h35 ||  // cg_name("D21_1")
-	    cg_struct_current.octet == 8'h42))  // cg_name("D2_2")	  
-	   
-	  rx_receive_sm_st = RX_CB_st;
-	
+	if(cg_struct_a[2].cg_name == "D21_1" || cg_struct_a[2].cg_name == "D2_2")
+	  rx_receive_sm_st = RX_CB_st;	
 	else if(cg_struct_current.cg_type != DATA && xmit != XMIT_DATA)
 	  rx_receive_sm_st = RX_INVALID_st;
-	else if((xmit != XMIT_DATA && 
-		 (cg_struct_current.cg_type == DATA && 
-		  cg_struct_current.octet != 8'h35 &&      //cg_name != ("D21_1")
-		  cg_struct_current.octet != 8'h42))       //cg_name != ("D2_2")
-		||
-		(xmit == XMIT_DATA && 
-		 (!(cg_struct_current.cg_type == DATA && 
-		    (cg_struct_current.octet == 8'h35 ||  //cg_name != ("D21_1")
-		     cg_struct_current.octet == 8'h42)))))//cg_name != ("D2_2")
-
-	   
-	  rx_receive_sm_st = IDLE_D_st;
-	
+	else if((xmit != XMIT_DATA &&
+		 cg_struct_a[2].os_name == "/D/" && 
+		 cg_struct_a[2].cg_name != "D21_1" && 
+		 cg_struct_a[2].cg_name != "D2_2") ||
+		(xmit == XMIT_DATA &&
+		 cg_struct_a[2].cg_name != "D21_1" && 
+		 cg_struct_a[2].cg_name != "D2_2"))
+	  rx_receive_sm_st = IDLE_D_st;	
      end // case: RX_K_st
      
      RX_CB_st: begin
@@ -461,14 +449,9 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      RX_CD_st: begin
 	rx_config_reg[15:8] = cg_struct_current.octet;
 	rudi = RUDI_CONFIG;
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC &&  // cg_name("K28_5")
-	   rx_even)
-	   
-	  rx_receive_sm_st = RX_K_st;
-	
-	else if(!(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC) ||  // cg_name("K28_5")
-		rx_even)
-	   
+	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
+	  rx_receive_sm_st = RX_K_st;	
+	else if(cg_struct_a[2].cg_name != "K28_5" || rx_even)	   
 	  rx_receive_sm_st = RX_INVALID_st;
      end
 
@@ -479,8 +462,7 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 	   rx_receive_sm_st = CARRIER_DETECT_st;
 	end
 	else if(xmit == XMIT_DATA && !carrier_detect() || 
-		cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC) // cg_name("K28_5")
-	   
+		cg_struct_a[2].cg_name == "K28_5")	   
 	  rx_receive_sm_st = RX_K_st;	
 	else
 	  rx_receive_sm_st = RX_INVALID_st;
@@ -488,16 +470,14 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      
      CARRIER_DETECT_st: begin
         receiving = 1;
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hFB) // os_name == "/S/"
+	if(cg_struct_a[2].os_name == "/S/")
           rx_receive_sm_st = START_OF_PACKET_st;
         else 
           rx_receive_sm_st = FALSE_CARRIER_st;
      end
 
      FALSE_CARRIER_st: begin
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC && // cg_name("K28_5")
-	   rx_even)
-	   
+	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)	   
 	  rx_receive_sm_st = RX_K_st;
      end
 
@@ -506,12 +486,10 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 	  rudi = RUDI_INVALID;
 	else if(xmit == XMIT_DATA)
 	  receiving = 1;
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC && // cg_name("K28_5")
-	   rx_even)
+	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
 	  rx_receive_sm_st = RX_K_st;
 	else
-	  if( !(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC) &&  // cg_name("K28_5")
-	      rx_even)
+	  if(cg_struct_a[2].cg_name != "K28_5" && rx_even)
 	    rx_receive_sm_st = WAIT_FOR_K_st;
      end // case: RX_INVALID_st
      
@@ -528,29 +506,20 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 
 	if(
 	   // decoder.check_end('{"K28_5" , "/D/"  , "K28_5"})
-	   (((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hBD) && // cg_name == "K28_5"
-	     (cg_struct_a[1].cg_type == DATA) &&                                     // cg_type == DATA
-	     (cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hBD))   // cg_name == "K28_5"
+	   (cg_struct_a[2].cg_name == "K28_5" &&
+	    cg_struct_a[1].os_name == "/D/" &&
+	    cg_struct_a[0].cg_name == "K28_5")
+	   ||
+	   (cg_struct_a[2].cg_name == "K28_5" &&
+	    cg_struct_a[1].cg_name == "D21_1" &&
+	    cg_struct_a[0].cg_name == "D0_0")	   
 	    ||
-	    // decoder.check_end('{"K28_5" , "D21_5", "D0_0"})
-	    ((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hBD) && // cg_name == "K28_5"
-	     (cg_struct_a[1].cg_type == DATA && cg_struct_a[1].octet == 8'hB5) &&    // cg_name == "D21_5"
-	     (cg_struct_a[0].cg_type == DATA && cg_struct_a[0].octet == 8'h00))      // cg_name == "D0_0"
-	    ||
-	    // decoder.check_end('{"K28_5" , "D2_2" , "D0_0"})
-	    ((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hBD) && // cg_name == "K28_5"
-	     (cg_struct_a[1].cg_type == DATA && cg_struct_a[1].octet == 8'h42) &&    // cg_name == "D2_2"
-	     (cg_struct_a[0].cg_type == DATA && cg_struct_a[0].octet == 8'h00)))     // cg_name == "D0_0"
+	   (cg_struct_a[2].cg_name == "K28_5" &&
+	    cg_struct_a[1].cg_name == "D2_2" &&
+	    cg_struct_a[0].cg_name == "D0_0")	   
 	   &&   
-	   rx_even)
-	   
+	   rx_even)	   
 	  rx_receive_sm_st = EARLY_END_st;
-
-	//decoder.check_end('{"/T/" , "/R/" , "K28_5"})
-	//else if((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hFD) && // os_name == "/T/"
-	//	(cg_struct_a[1].cg_type == SPECIAL && cg_struct_a[1].octet == 8'hF7) && // os_name == "/R/"
-	//	(cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hBD) && // cg_name == "K28_5"
-	//	rx_even)
 
 	else if(cg_struct_a[2].cg_name == "K29_7" &&
 		cg_struct_a[1].cg_name == "K23_7" &&
@@ -559,15 +528,15 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 	  rx_receive_sm_st = TRI_RRI_st;
 	
 	//decoder.check_end('{"/T/" , "/R/" , "/R/"})
-	else if((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hFD) && // os_name == "/T/"
-		(cg_struct_a[1].cg_type == SPECIAL && cg_struct_a[1].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hF7))   // os_name == "/R/"
+	else if(cg_struct_a[2].os_name == "/T/" &&
+		cg_struct_a[1].os_name == "/R/" &&
+		cg_struct_a[0].os_name == "/R/")
 	  rx_receive_sm_st = TRR_EXTEND_st;
 
 	//decoder.check_end('{"/R/" , "/R/" , "/R/"})
-	else if((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[1].cg_type == SPECIAL && cg_struct_a[1].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hF7))   // os_name == "/R/"
+	else if(cg_struct_a[2].os_name == "/R/" &&
+		cg_struct_a[1].os_name == "/R/" &&
+		cg_struct_a[0].os_name == "/R/")
 	  rx_receive_sm_st = EARLY_END_EXT_st;
 
 	else if(cg_struct_current.cg_type == DATA)
@@ -578,22 +547,18 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      end // case: RECEIVE_st
 
      EARLY_END_st: begin
-	
-	if(cg_struct_current.cg_type == DATA && 
-	   (cg_struct_current.octet == 8'h35 ||  //cg_name("D21_1")
-	    cg_struct_current.octet == 8'h42))   //cg_name("D2_2")
-	   
-	  rx_receive_sm_st = RX_CB_st;
 
+	if(cg_struct_a[2].cg_name == "D21_1" &&
+	   cg_struct_a[1].cg_name == "D2_2")	   
+	  rx_receive_sm_st = RX_CB_st;
 	else
 	  rx_receive_sm_st = IDLE_D_st;	
      end
      
      TRI_RRI_st: begin
 	receiving = 1;
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC) begin // cg_name("K28_5")
+	if(cg_struct_a[2].cg_name == "K28_5")
 	   rx_receive_sm_st = RX_K_st;
-	end
      end
      
      TRR_EXTEND_st: begin
@@ -613,41 +578,35 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      end
 
      PACKET_BURST_RPS_st: begin
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hFB) begin // os_to_octet == "/S/"
+	if(cg_struct_a[2].os_name == "/S/")
 	   rx_receive_sm_st = START_OF_PACKET_st;
-	end
      end
 
      EXTEND_ERR_st: begin
-	if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hFB) begin // os_to_octet == "/S/"
+	if(cg_struct_a[2].os_name == "/S/")
 	   rx_receive_sm_st = START_OF_PACKET_st;
-	end
-	else if(cg_struct_current.cg_type == SPECIAL && cg_struct_current.octet == 8'hBC  // cg_name("K28_5")
-		&& rx_even)
+	else if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
 	  rx_receive_sm_st = RX_K_st;
 	else
 	  rx_receive_sm_st = EPD2_CHECK_END_st;
      end	      
      
      EPD2_CHECK_END_st: begin
-	if((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hF7) && // os_name == "/R/"
-	   (cg_struct_a[1].cg_type == SPECIAL && cg_struct_a[1].octet == 8'hF7) && // os_name == "/R/"
-	   (cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hF7) && // os_name == "/R/"
-	   rx_even)
+	if(cg_struct_a[2].os_name == "/R/" &&
+	   cg_struct_a[1].os_name == "/R/" &&
+	   cg_struct_a[0].os_name == "/R/")
 	  rx_receive_sm_st = TRR_EXTEND_st;
 
-	else if((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[1].cg_type == SPECIAL && cg_struct_a[1].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hBD) && // cg_type == "K28_5"
+	else if(cg_struct_a[2].os_name == "/R/" &&
+		cg_struct_a[1].os_name == "/R/" &&
+		cg_struct_a[0].cg_name == "K28_5" &&
 		rx_even)
 	  rx_receive_sm_st = TRI_RRI_st;
 
-	else if((cg_struct_a[2].cg_type == SPECIAL && cg_struct_a[2].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[1].cg_type == SPECIAL && cg_struct_a[1].octet == 8'hF7) && // os_name == "/R/"
-		(cg_struct_a[0].cg_type == SPECIAL && cg_struct_a[0].octet == 8'hFB) && // os_name == "/S/"
-		rx_even)
+	else if(cg_struct_a[2].os_name == "/R/" &&
+		cg_struct_a[1].os_name == "/R/" &&
+		cg_struct_a[0].os_name == "/S/")
 	  rx_receive_sm_st = PACKET_BURST_RPS_st;
-
 	else
 	  rx_receive_sm_st = EXTEND_ERR_st;
 	
@@ -796,7 +755,8 @@ function cg_struct_t pcs_rx_comp::decode_8b10b(cg_t cg , crd_t CRD, bit comma);
       cg_struct.cg_type = INVALID;
       cg_struct.cg_name = "INVALID";
    end  
-   
+
+   pcs_common_methods_h.get_os(cg_struct);
    //`uvm_info("PCS_RX_COMP" , $sformatf("DATA VAL: %8b %0s" , cg_struct.octet , cg_struct.cg_name) , UVM_FULL)
    cg_struct.comma = comma;
    
@@ -867,12 +827,7 @@ function void pcs_rx_comp::print_cg(ref cg_struct_t cg_struct = cg_struct_curren
    print_struct.footer_q.push_back(footer_struct);
 
    footer_struct.footer_name_s = "cg_name";
-   case(cg_struct.cg_type)
-     DATA:    cg_name = $sformatf("D%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
-     SPECIAL: cg_name = $sformatf("K%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
-     INVALID: cg_name = "INVALID";
-   endcase // case (cg_struct.cg_type)
-   footer_struct.footer_val_s = cg_name;
+   footer_struct.footer_val_s = cg_struct.cg_name;
    print_struct.footer_q.push_back(footer_struct);
 
    footer_struct.footer_name_s = "os_name";      
@@ -884,7 +839,7 @@ function void pcs_rx_comp::print_cg(ref cg_struct_t cg_struct = cg_struct_curren
    print_struct.footer_q.push_back(footer_struct);
 
    msg_print_h.print(print_struct);   
-
+ 
 endfunction // print_cg
 
 function void pcs_rx_comp::print_pcs_rx_sync_vars();
