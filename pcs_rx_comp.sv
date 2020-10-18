@@ -24,8 +24,9 @@ class pcs_rx_comp extends uvm_component;
    
    pcs_common_methods pcs_common_methods_h;
    
-   virtual pcs_if vif;
+   virtual 	 pcs_if vif;
    uvm_analysis_port #(pcs_seq_item) analysis_port;
+   pcs_seq_item pcs_seq_item_h;
    
    // queue with three items is used to store three 
    // consecutive code-groups for check_end() function.
@@ -86,7 +87,7 @@ class pcs_rx_comp extends uvm_component;
    //extern function void print_pcs_rx_rcv_vars();
 
    // This task allows to write sequence items into analysis port
-   extern task write_an();
+   extern function void write_an();
 
    // This function is used to enable analysys port wrintting
    extern function void set_analysis(bit analysis_enable);
@@ -116,10 +117,6 @@ endfunction // build_phase
 task pcs_rx_comp::run_phase(uvm_phase phase);
    fork
       pma_receive_process();
-      begin
-	 if(analysis_enable)
-	   write_an();
-      end
    join_none   
 endtask // run_phase
 
@@ -127,7 +124,7 @@ function void pcs_rx_comp::set_analysis(bit analysis_enable);
    this.analysis_enable = analysis_enable;
 endfunction // set_analysis
 
-   
+
 //-------------------------------------------------
 // 36.3 Physical Medium Attachment (PMA) sublayer
 //-------------------------------------------------
@@ -513,7 +510,7 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 	   (cg_struct_a[2].cg_name == "K28_5" &&
 	    cg_struct_a[1].cg_name == "D21_1" &&
 	    cg_struct_a[0].cg_name == "D0_0")	   
-	    ||
+	   ||
 	   (cg_struct_a[2].cg_name == "K28_5" &&
 	    cg_struct_a[1].cg_name == "D2_2" &&
 	    cg_struct_a[0].cg_name == "D0_0")	   
@@ -558,7 +555,7 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      TRI_RRI_st: begin
 	receiving = 1;
 	if(cg_struct_a[2].cg_name == "K28_5")
-	   rx_receive_sm_st = RX_K_st;
+	  rx_receive_sm_st = RX_K_st;
      end
      
      TRR_EXTEND_st: begin
@@ -579,12 +576,12 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 
      PACKET_BURST_RPS_st: begin
 	if(cg_struct_a[2].os_name == "/S/")
-	   rx_receive_sm_st = START_OF_PACKET_st;
+	  rx_receive_sm_st = START_OF_PACKET_st;
      end
 
      EXTEND_ERR_st: begin
 	if(cg_struct_a[2].os_name == "/S/")
-	   rx_receive_sm_st = START_OF_PACKET_st;
+	  rx_receive_sm_st = START_OF_PACKET_st;
 	else if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
 	  rx_receive_sm_st = RX_K_st;
 	else
@@ -621,13 +618,15 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 
    if(rx_receive_sm_st == RECEIVE_st || rx_receive_sm_st == EPD2_CHECK_END_st)
      print_check_end();
+   if(analysis_enable)
+     write_an();
    
    //----------------------------------------------
    // Second case is used to execute actions in NEW state
    //----------------------------------------------
    
    case(rx_receive_sm_st)
-           
+     
      LINK_FAILED_st: begin
 	if(xmit != XMIT_DATA)
 	  rudi = RUDI_INVALID;
@@ -685,44 +684,39 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      end // case: EPD2_CHECK_END_st
      
    endcase // case (rx_receive_sm_st)
-      
+   
 endfunction // pcs_rx_rcv_sm
 
-task pcs_rx_comp::write_an();
-
-   pcs_seq_item pcs_seq_item_h;
+function void pcs_rx_comp::write_an();
    
-   forever begin
-      @(rx_receive_sm_st);
-      
-      if(rx_receive_sm_st == START_OF_PACKET_st)
-	pcs_seq_item_h = pcs_seq_item::type_id::create("pcs_seq_item", this);
-      if(rx_receive_sm_st == RX_DATA_st)
-	pcs_seq_item_h.rx_frame_q.push_back(cg_struct_current.octet);
+   if(rx_receive_sm_st == START_OF_PACKET_st) begin
+      pcs_seq_item_h = pcs_seq_item::type_id::create("pcs_seq_item", this);
+   end
+   if(rx_receive_sm_st == RX_DATA_st) begin
+      pcs_seq_item_h.rx_frame_q.push_back(cg_struct_a[2].octet);
+   end
 
-      // Check that frame was received without errors
-      if(pcs_seq_item_h != null &&					 
-	 !pcs_seq_item_h.rx_err &&
-	 (rx_receive_sm_st == RX_DATA_ERROR_st ||
-	  rx_receive_sm_st == EARLY_END_EXT_st ||
-	  rx_receive_sm_st == TRR_EXTEND_st ||
-	  rx_receive_sm_st == EARLY_END_EXT_st))
-	pcs_seq_item_h.rx_err = 1;
-      
-      // Write packet into AP
-      if(pcs_seq_item_h != null &&
-	 (rx_receive_sm_st == EARLY_END_EXT_st ||
-	  rx_receive_sm_st == TRI_RRI_st ||
-	  rx_receive_sm_st == TRR_EXTEND_st ||
-	  rx_receive_sm_st == EARLY_END_EXT_st)) 
-	begin
-	   //`uvm_info("PCS_RX_COMP" , pcs_seq_item_h.convert2string() , UVM_LOW)      
-	   analysis_port.write(pcs_seq_item_h);
-	end      
-      
-   end // forever begin
+   // Check that frame was received without errors
+   if(pcs_seq_item_h != null &&					 
+      !pcs_seq_item_h.rx_err &&
+      (rx_receive_sm_st == RX_DATA_ERROR_st ||
+       rx_receive_sm_st == EARLY_END_EXT_st ||
+       rx_receive_sm_st == TRR_EXTEND_st ||
+       rx_receive_sm_st == EARLY_END_EXT_st))
+     pcs_seq_item_h.rx_err = 1;
    
-endtask // write_an
+   // Write packet into AP
+   if(pcs_seq_item_h != null &&
+      (rx_receive_sm_st == EARLY_END_EXT_st ||
+       rx_receive_sm_st == TRI_RRI_st ||
+       rx_receive_sm_st == TRR_EXTEND_st ||
+       rx_receive_sm_st == EARLY_END_EXT_st)) 
+     begin
+	pcs_seq_item_h.rx_print();
+	analysis_port.write(pcs_seq_item_h);
+     end      
+
+endfunction // write_an
 
 function void pcs_rx_comp::print_sm_state(string state_s);
 
@@ -839,7 +833,7 @@ function void pcs_rx_comp::print_cg(ref cg_struct_t cg_struct = cg_struct_curren
    print_struct.footer_q.push_back(footer_struct);
 
    msg_print_h.print(print_struct);   
- 
+   
 endfunction // print_cg
 
 function void pcs_rx_comp::print_pcs_rx_sync_vars();
