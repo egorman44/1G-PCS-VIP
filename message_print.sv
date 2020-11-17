@@ -6,6 +6,7 @@ class message_print extends uvm_object;
    extern function new(string name = "message_print");   
    extern function void print (print_struct_t msg_struct);
    extern function string space_padding (string in_s , int new_length);
+   extern function message_print copy();
    
 endclass // message_printer
 
@@ -13,16 +14,21 @@ function message_print::new(string name = "message_print");
    super.new(name);
 endfunction: new
 
+function message_print message_print::copy();
+   message_print msg_print_copy_h;
+   msg_print_copy_h = message_print::type_id::create("msg_print");
+   return msg_print_copy_h;
+endfunction // copy
+
 function void message_print::print(print_struct_t msg_struct);
 
    string debug_s = "";   
    string delimeter_s = "--------------------------------";
    string footer_line_s;
    
-   int 	  longest_footer_size = 0;
-   
+   int 	  longest_footer_size = 0;   
 
-   debug_s = {debug_s , "\n"};   
+   debug_s = {debug_s , "\n\n"};   
    debug_s = {debug_s , delimeter_s , "\n"};   
    debug_s = {debug_s , msg_struct.header_s , "\n"};
    debug_s = {debug_s , delimeter_s , "\n"};
