@@ -25,21 +25,13 @@ class pcs_rx_comp extends uvm_component;
    pcs_common_methods pcs_common_methods_h;
    
    virtual 	 pcs_if vif;
-   uvm_analysis_port #(pcs_seq_item) analysis_port;
-   pcs_seq_item pcs_seq_item_h;
+   uvm_analysis_port #(pcs_seq_item) ap_h;
+   pcs_seq_item rx_seq_item_h, clone_h;
    
-   // queue with three items is used to store three 
-   // consecutive code-groups for check_end() function.
+   op_mode_t op_mode = HALF_DUPLEX_m;
    
-   cg_struct_t cg_struct_q[$];
-
-   // code group that is used for all calculations at
-   // a current time slot.
-   
-   cg_struct_t cg_struct_current;
-
    // pma_receive_process variables
-   protected cg_struct_t cg_struct_a[2:0];
+   protected cg_struct_t cg_rx_struct_a[2:0];
    protected crd_t crd_rx;
 
    // pcs_rx_sync_sm state variables
@@ -54,11 +46,17 @@ class pcs_rx_comp extends uvm_component;
    protected rx_receive_sm_st_t rx_receive_sm_st = LINK_FAILED_st;
    protected rudi_t rudi;
    protected bit [15:0] rx_config_reg;
-   protected bit 	receiving;
+   protected bit 	receiving;  
+ 
+   protected byte 	rx_frame_q[$];
+   protected int 	carrier_extend_cntr;
+   protected int 	carrier_extend_err_cntr;
 
    // events that is used to synchronize functionality for pcs_rx_sync_proc
    // and  pcs_rx_rcv_proc
 
+   event rx_seq_item_ready_e;
+   
    message_print msg_print_h;
 
    //////////////////
@@ -81,27 +79,31 @@ class pcs_rx_comp extends uvm_component;
    extern task pma_receive_process();
    
    extern function void pcs_rx_sync_sm();
+   extern virtual function void mid_pcs_rx_sync_sm();
+   extern virtual function void end_pcs_rx_sync_sm();
+   
    extern function void pcs_rx_rcv_sm();
-
+   extern virtual function void mid_pcs_rx_rcv_sm();
+   extern virtual function void end_pcs_rx_rcv_sm();
+   
    extern function void print_pcs_rx_sync_vars();
+   extern virtual function void rx_seq_item_ready();
    //extern function void print_pcs_rx_rcv_vars();
-
-   // This task allows to write sequence items into analysis port
-   extern function void write_an();
-
+   
    // This function is used to enable analysys port wrintting
    extern function void set_analysis(bit analysis_enable);
    
-   extern function void print_sm_state(string state_s);
    extern function void print_check_end();
-   extern function void print_cg(ref cg_struct_t cg_struct = cg_struct_current);
    
    extern function bit is_cggood();   
    extern function bit check_comma(cg_t cg);
    extern function void os_set();
 
    extern function cg_struct_t decode_8b10b(cg_t cg , crd_t CRD, bit comma);
-   extern function bit carrier_detect();  
+   extern function bit carrier_detect();
+
+   extern virtual function void rx_sm_completion();
+   
 endclass // pcs_rx_comp
 
 function pcs_rx_comp::new(string name = "pcs_rx_comp", uvm_component parent=null);
@@ -112,6 +114,7 @@ function void pcs_rx_comp::build_phase(uvm_phase phase);
    super.build_phase(phase);
    pcs_common_methods_h = pcs_common_methods::type_id::create("pcs_common_methods_h");
    msg_print_h = message_print::type_id::create("msg_print");
+   ap_h = new("an_port", this);
 endfunction // build_phase
 
 task pcs_rx_comp::run_phase(uvm_phase phase);
@@ -123,7 +126,6 @@ endtask // run_phase
 function void pcs_rx_comp::set_analysis(bit analysis_enable);
    this.analysis_enable = analysis_enable;
 endfunction // set_analysis
-
 
 //-------------------------------------------------
 // 36.3 Physical Medium Attachment (PMA) sublayer
@@ -166,17 +168,17 @@ task pcs_rx_comp::pma_receive_process();
       end // else: !if(is_comma == FALSE)
 
       cg = two_ten_bits[comma_position+:10];
-      cg_struct_a = {cg_struct_a[1:0],decode_8b10b(cg, crd_rx, is_comma)};
-      cg_struct_current = cg_struct_a[2];
+      cg_rx_struct_a = {cg_rx_struct_a[1:0],decode_8b10b(cg, crd_rx, is_comma)};
       pcs_common_methods_h.crd_rules(cg, crd_rx);
       
       // Enable sync process only when three code-groups were received
       if(cg_counter < 2)
 	++cg_counter;
       else begin
-	 print_cg(cg_struct_a[2]);
+	 pcs_common_methods_h.print_cg("RX CODE GROUP",cg_rx_struct_a[2]);
 	 pcs_rx_sync_sm();
 	 pcs_rx_rcv_sm();
+	 rx_sm_completion();
       end
 
    end   
@@ -191,119 +193,120 @@ function void pcs_rx_comp::pcs_rx_sync_sm();
    if(vif.mr_main_reset) 
      rx_sync_sm_st = LOSS_OF_SYNC_st;
 
-   //----------------------------------------------
-   // First case is used to calculate NEW state
-   // based on OLD state
-   //----------------------------------------------
-
-   case(rx_sync_sm_st)
-     
-     LOSS_OF_SYNC_st: begin
-	if(cg_struct_current.comma)
-	  rx_sync_sm_st = COMMA_DETECT_1_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-     end
-     
-     COMMA_DETECT_1_st: begin
-	if(cg_struct_current.cg_type == DATA)
-	  rx_sync_sm_st = ACQUIRE_SYNC_1_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-     end
-     
-     ACQUIRE_SYNC_1_st: begin
-	if(!rx_even && cg_struct_current.comma)
-	  rx_sync_sm_st = COMMA_DETECT_2_st;
-	else if(cg_struct_current.cg_type != INVALID && !cg_struct_current.comma)
-	  rx_sync_sm_st = ACQUIRE_SYNC_1_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-     end
-
-     COMMA_DETECT_2_st: begin
-	if(cg_struct_current.cg_type == DATA)
-	  rx_sync_sm_st = ACQUIRE_SYNC_2_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;	      
-     end
-
-     ACQUIRE_SYNC_2_st: begin
-	`uvm_info("PCS_RX_COMP" , $sformatf("is_comma = %0b , is_invalid = %0b" , cg_struct_current.cg_type == INVALID , cg_struct_current.comma) , UVM_FULL)
+   else begin
+      
+      //----------------------------------------------
+      // First case is used to calculate NEW state
+      // based on OLD state
+      //----------------------------------------------
+      
+      case(rx_sync_sm_st)
 	
-	if(!rx_even && cg_struct_current.comma)
-	  rx_sync_sm_st = COMMA_DETECT_3_st;
-	else if(!cg_struct_current.cg_type == INVALID && !cg_struct_current.comma)
-	  rx_sync_sm_st = ACQUIRE_SYNC_2_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;
-     end
+	LOSS_OF_SYNC_st: begin
+	   if(cg_rx_struct_a[2].comma)
+	     rx_sync_sm_st = COMMA_DETECT_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
+	
+	COMMA_DETECT_1_st: begin
+	   if(cg_rx_struct_a[2].cg_type == DATA)
+	     rx_sync_sm_st = ACQUIRE_SYNC_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
+	
+	ACQUIRE_SYNC_1_st: begin
+	   if(!rx_even && cg_rx_struct_a[2].comma)
+	     rx_sync_sm_st = COMMA_DETECT_2_st;
+	   else if(cg_rx_struct_a[2].cg_type != INVALID && !cg_rx_struct_a[2].comma)
+	     rx_sync_sm_st = ACQUIRE_SYNC_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
 
-     COMMA_DETECT_3_st: begin
-	if(cg_struct_current.cg_type == DATA)
-	  rx_sync_sm_st = SYNC_ACQUIRED_1_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;
-     end
-     
-     SYNC_ACQUIRED_1_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = SYNC_ACQUIRED_1_st;
-	else
-	  rx_sync_sm_st = SYNC_ACQUIRED_2_st;
-     end
+	COMMA_DETECT_2_st: begin
+	   if(cg_rx_struct_a[2].cg_type == DATA)
+	     rx_sync_sm_st = ACQUIRE_SYNC_2_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;	      
+	end
 
-     SYNC_ACQUIRED_2_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = SYNC_ACQUIRED_2A_st;
-	else 
-	  rx_sync_sm_st = SYNC_ACQUIRED_3_st;
-     end
+	ACQUIRE_SYNC_2_st: begin
+	   `uvm_info("PCS_RX_COMP" , $sformatf("is_comma = %0b , is_invalid = %0b" , cg_rx_struct_a[2].cg_type == INVALID , cg_rx_struct_a[2].comma) , UVM_FULL)
+	   if(!rx_even && cg_rx_struct_a[2].comma)
+	     rx_sync_sm_st = COMMA_DETECT_3_st;
+	   else if(cg_rx_struct_a[2].cg_type != INVALID && !cg_rx_struct_a[2].comma)
+	     rx_sync_sm_st = ACQUIRE_SYNC_2_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
 
-     SYNC_ACQUIRED_2A_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_1_st : SYNC_ACQUIRED_2A_st;
-	else
-	  rx_sync_sm_st = SYNC_ACQUIRED_3_st;
-     end
+	COMMA_DETECT_3_st: begin
+	   if(cg_rx_struct_a[2].cg_type == DATA)
+	     rx_sync_sm_st = SYNC_ACQUIRED_1_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
+	
+	SYNC_ACQUIRED_1_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = SYNC_ACQUIRED_1_st;
+	   else
+	     rx_sync_sm_st = SYNC_ACQUIRED_2_st;
+	end
 
-     SYNC_ACQUIRED_3_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = SYNC_ACQUIRED_3A_st;
-	else 
-	  rx_sync_sm_st = SYNC_ACQUIRED_4_st;
-     end
+	SYNC_ACQUIRED_2_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = SYNC_ACQUIRED_2A_st;
+	   else 
+	     rx_sync_sm_st = SYNC_ACQUIRED_3_st;
+	end
 
-     SYNC_ACQUIRED_3A_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_2_st : SYNC_ACQUIRED_3A_st;
-	else
-	  rx_sync_sm_st = SYNC_ACQUIRED_4_st;
-     end
+	SYNC_ACQUIRED_2A_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_1_st : SYNC_ACQUIRED_2A_st;
+	   else
+	     rx_sync_sm_st = SYNC_ACQUIRED_3_st;
+	end
 
-     SYNC_ACQUIRED_4_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = SYNC_ACQUIRED_4A_st;
-	else 
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;
-     end
+	SYNC_ACQUIRED_3_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = SYNC_ACQUIRED_3A_st;
+	   else 
+	     rx_sync_sm_st = SYNC_ACQUIRED_4_st;
+	end
 
-     SYNC_ACQUIRED_4A_st: begin
-	if(is_cggood())
-	  rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_3_st : SYNC_ACQUIRED_4A_st;
-	else
-	  rx_sync_sm_st = LOSS_OF_SYNC_st;
-     end
+	SYNC_ACQUIRED_3A_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_2_st : SYNC_ACQUIRED_3A_st;
+	   else
+	     rx_sync_sm_st = SYNC_ACQUIRED_4_st;
+	end
 
-     default:
-       `uvm_fatal("PCS_RX_COMP", $sformatf("The state %0s is INCALID for PCS_RX_SYNC sm" , rx_sync_sm_st))
-     
-   endcase // case (rx_sync_sm_st)
+	SYNC_ACQUIRED_4_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = SYNC_ACQUIRED_4A_st;
+	   else 
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
 
-   print_sm_state({"RX SYNC STATE : " , rx_sync_sm_st.name()});
+	SYNC_ACQUIRED_4A_st: begin
+	   if(is_cggood())
+	     rx_sync_sm_st = (good_cgs == 3) ? SYNC_ACQUIRED_3_st : SYNC_ACQUIRED_4A_st;
+	   else
+	     rx_sync_sm_st = LOSS_OF_SYNC_st;
+	end
+
+	default:
+	  `uvm_fatal("PCS_RX_COMP", $sformatf("The state %0s is INCALID for PCS_RX_SYNC sm" , rx_sync_sm_st))
+	
+      endcase // case (rx_sync_sm_st)
+   end // else: !if(vif.mr_main_reset)
    
+   mid_pcs_rx_sync_sm();
    //----------------------------------------------
-   // Second case is used to execute actions in NEW state
+   // Second case is used to execute actions in the NEW state
    //----------------------------------------------
    
    case(rx_sync_sm_st)
@@ -370,12 +373,12 @@ function void pcs_rx_comp::pcs_rx_sync_sm();
      
    endcase // case (rx_sync_sm_st)
 
-   print_pcs_rx_sync_vars();
+   end_pcs_rx_sync_sm();   
    
 endfunction // pcs_rx_sync_sm
 
 function bit pcs_rx_comp::is_cggood();
-   is_cggood = !((cg_struct_current.comma && rx_even) || cg_struct_current.cg_type == INVALID);
+   is_cggood = !((cg_rx_struct_a[2].comma && rx_even) || cg_rx_struct_a[2].cg_type == INVALID);
 endfunction // is_cggood
 
 //--------------------------------------------------------
@@ -388,238 +391,227 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      rx_receive_sm_st = WAIT_FOR_K_st;
    else if(!sync_status)
      rx_receive_sm_st = LINK_FAILED_st;
-   
-   `uvm_info("PCS_RX_COMP" , $sformatf("SUDI event has occured"), UVM_FULL);
+   else begin
+      
+      //----------------------------------------------
+      // First case is used to calculate NEW state
+      // based on OLD state
+      //----------------------------------------------
 
-   //----------------------------------------------
-   // First case is used to calculate NEW state
-   // based on OLD state
-   //----------------------------------------------
-
-   case(rx_receive_sm_st)
-     
-     LINK_FAILED_st: begin
-	if(xmit != XMIT_DATA)
-	  rudi = RUDI_INVALID;
-	receiving = 0;
-	rx_receive_sm_st = WAIT_FOR_K_st;		 
-     end
-     
-     WAIT_FOR_K_st: begin
-	receiving = 0;
-	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)	   
-	  rx_receive_sm_st = RX_K_st;
-     end
-     
-     RX_K_st: begin
-	receiving = 0;
-	if(cg_struct_a[2].cg_name == "D21_1" || cg_struct_a[2].cg_name == "D2_2")
-	  rx_receive_sm_st = RX_CB_st;	
-	else if(cg_struct_current.cg_type != DATA && xmit != XMIT_DATA)
-	  rx_receive_sm_st = RX_INVALID_st;
-	else if((xmit != XMIT_DATA &&
-		 cg_struct_a[2].os_name == "/D/" && 
-		 cg_struct_a[2].cg_name != "D21_1" && 
-		 cg_struct_a[2].cg_name != "D2_2") ||
-		(xmit == XMIT_DATA &&
-		 cg_struct_a[2].cg_name != "D21_1" && 
-		 cg_struct_a[2].cg_name != "D2_2"))
-	  rx_receive_sm_st = IDLE_D_st;	
-     end // case: RX_K_st
-     
-     RX_CB_st: begin
-	receiving = 0;
-	if(cg_struct_current.cg_type == DATA)
-	  rx_receive_sm_st = RX_CC_st;
-	else
-	  rx_receive_sm_st = RX_INVALID_st;	     
-     end
-
-     RX_CC_st: begin
-	rx_config_reg[7:0] = cg_struct_current.octet;
-	if(cg_struct_current.cg_type == DATA)
-	  rx_receive_sm_st = RX_CD_st;
-	else
-	  rx_receive_sm_st = RX_INVALID_st;
-     end
-
-     RX_CD_st: begin
-	rx_config_reg[15:8] = cg_struct_current.octet;
-	rudi = RUDI_CONFIG;
-	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
-	  rx_receive_sm_st = RX_K_st;	
-	else if(cg_struct_a[2].cg_name != "K28_5" || rx_even)	   
-	  rx_receive_sm_st = RX_INVALID_st;
-     end
-
-     IDLE_D_st: begin
-	receiving = 0;
-	rudi = RUDI_INVALID;
-	if(xmit == XMIT_DATA && carrier_detect()) begin	  
-	   rx_receive_sm_st = CARRIER_DETECT_st;
+      case(rx_receive_sm_st)
+	
+	LINK_FAILED_st: begin
+	   rx_receive_sm_st = WAIT_FOR_K_st;		 
 	end
-	else if(xmit == XMIT_DATA && !carrier_detect() || 
-		cg_struct_a[2].cg_name == "K28_5")	   
-	  rx_receive_sm_st = RX_K_st;	
-	else
-	  rx_receive_sm_st = RX_INVALID_st;
-     end // case: IDLE_D_st
-     
-     CARRIER_DETECT_st: begin
-        receiving = 1;
-	if(cg_struct_a[2].os_name == "/S/")
-          rx_receive_sm_st = START_OF_PACKET_st;
-        else 
-          rx_receive_sm_st = FALSE_CARRIER_st;
-     end
-
-     FALSE_CARRIER_st: begin
-	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)	   
-	  rx_receive_sm_st = RX_K_st;
-     end
-
-     RX_INVALID_st: begin
-	if(xmit == XMIT_CONFIG)
-	  rudi = RUDI_INVALID;
-	else if(xmit == XMIT_DATA)
-	  receiving = 1;
-	if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
-	  rx_receive_sm_st = RX_K_st;
-	else
-	  if(cg_struct_a[2].cg_name != "K28_5" && rx_even)
-	    rx_receive_sm_st = WAIT_FOR_K_st;
-     end // case: RX_INVALID_st
-     
-     START_OF_PACKET_st: begin
-	rx_receive_sm_st = RECEIVE_st;
-     end
-
-     // RECEIVE_st doesn't wait for a new SUDI message, so
-     // here we call pcs_rx_rcv_sm() recursively.
-     // This state also calls check_end function that checks
-     // three consequtive code-groups
-     
-     RECEIVE_st: begin
-
-	if(
-	   // decoder.check_end('{"K28_5" , "/D/"  , "K28_5"})
-	   (cg_struct_a[2].cg_name == "K28_5" &&
-	    cg_struct_a[1].os_name == "/D/" &&
-	    cg_struct_a[0].cg_name == "K28_5")
-	   ||
-	   (cg_struct_a[2].cg_name == "K28_5" &&
-	    cg_struct_a[1].cg_name == "D21_1" &&
-	    cg_struct_a[0].cg_name == "D0_0")	   
-	   ||
-	   (cg_struct_a[2].cg_name == "K28_5" &&
-	    cg_struct_a[1].cg_name == "D2_2" &&
-	    cg_struct_a[0].cg_name == "D0_0")	   
-	   &&   
-	   rx_even)	   
-	  rx_receive_sm_st = EARLY_END_st;
-
-	else if(cg_struct_a[2].cg_name == "K29_7" &&
-		cg_struct_a[1].cg_name == "K23_7" &&
-		cg_struct_a[0].cg_name == "K28_5" &&
-		rx_even)
-	  rx_receive_sm_st = TRI_RRI_st;
 	
-	//decoder.check_end('{"/T/" , "/R/" , "/R/"})
-	else if(cg_struct_a[2].os_name == "/T/" &&
-		cg_struct_a[1].os_name == "/R/" &&
-		cg_struct_a[0].os_name == "/R/")
-	  rx_receive_sm_st = TRR_EXTEND_st;
-
-	//decoder.check_end('{"/R/" , "/R/" , "/R/"})
-	else if(cg_struct_a[2].os_name == "/R/" &&
-		cg_struct_a[1].os_name == "/R/" &&
-		cg_struct_a[0].os_name == "/R/")
-	  rx_receive_sm_st = EARLY_END_EXT_st;
-
-	else if(cg_struct_current.cg_type == DATA)
-	  rx_receive_sm_st = RX_DATA_st;
-	else
-	  rx_receive_sm_st = RX_DATA_ERROR_st;
-
-     end // case: RECEIVE_st
-
-     EARLY_END_st: begin
-
-	if(cg_struct_a[2].cg_name == "D21_1" &&
-	   cg_struct_a[1].cg_name == "D2_2")	   
-	  rx_receive_sm_st = RX_CB_st;
-	else
-	  rx_receive_sm_st = IDLE_D_st;	
-     end
-     
-     TRI_RRI_st: begin
-	receiving = 1;
-	if(cg_struct_a[2].cg_name == "K28_5")
-	  rx_receive_sm_st = RX_K_st;
-     end
-     
-     TRR_EXTEND_st: begin
-	rx_receive_sm_st = EPD2_CHECK_END_st;
-     end
-     
-     EARLY_END_EXT_st: begin
-	rx_receive_sm_st = EPD2_CHECK_END_st;
-     end
-     
-     RX_DATA_st: begin
-	rx_receive_sm_st = RECEIVE_st;
-     end
-     
-     RX_DATA_ERROR_st: begin
-	rx_receive_sm_st = RECEIVE_st;
-     end
-
-     PACKET_BURST_RPS_st: begin
-	if(cg_struct_a[2].os_name == "/S/")
-	  rx_receive_sm_st = START_OF_PACKET_st;
-     end
-
-     EXTEND_ERR_st: begin
-	if(cg_struct_a[2].os_name == "/S/")
-	  rx_receive_sm_st = START_OF_PACKET_st;
-	else if(cg_struct_a[2].cg_name == "K28_5" && rx_even)
-	  rx_receive_sm_st = RX_K_st;
-	else
-	  rx_receive_sm_st = EPD2_CHECK_END_st;
-     end	      
-     
-     EPD2_CHECK_END_st: begin
-	if(cg_struct_a[2].os_name == "/R/" &&
-	   cg_struct_a[1].os_name == "/R/" &&
-	   cg_struct_a[0].os_name == "/R/")
-	  rx_receive_sm_st = TRR_EXTEND_st;
-
-	else if(cg_struct_a[2].os_name == "/R/" &&
-		cg_struct_a[1].os_name == "/R/" &&
-		cg_struct_a[0].cg_name == "K28_5" &&
-		rx_even)
-	  rx_receive_sm_st = TRI_RRI_st;
-
-	else if(cg_struct_a[2].os_name == "/R/" &&
-		cg_struct_a[1].os_name == "/R/" &&
-		cg_struct_a[0].os_name == "/S/")
-	  rx_receive_sm_st = PACKET_BURST_RPS_st;
-	else
-	  rx_receive_sm_st = EXTEND_ERR_st;
+	WAIT_FOR_K_st: begin
+	   if(cg_rx_struct_a[2].cg_name == "K28_5" && rx_even)	   
+	     rx_receive_sm_st = RX_K_st;
+	end
 	
-     end // case: EPD2_CHECK_END_st
-     
-     default:
-       `uvm_fatal(get_type_name(), $sformatf("The state %0s is INVALID for pcs_rx_rcv_sm" , rx_receive_sm_st))
-     
-   endcase // case (rx_receive_sm_st)
+	RX_K_st: begin
+	   if(cg_rx_struct_a[2].cg_name == "D21_1" || cg_rx_struct_a[2].cg_name == "D2_2")
+	     rx_receive_sm_st = RX_CB_st;	
+	   else if(cg_rx_struct_a[2].cg_type != DATA && xmit != XMIT_DATA)
+	     rx_receive_sm_st = RX_INVALID_st;
+	   else if((xmit != XMIT_DATA &&
+		    cg_rx_struct_a[2].os_name == "/D/" && 
+		    cg_rx_struct_a[2].cg_name != "D21_1" && 
+		    cg_rx_struct_a[2].cg_name != "D2_2") ||
+		   (xmit == XMIT_DATA &&
+		    cg_rx_struct_a[2].cg_name != "D21_1" && 
+		    cg_rx_struct_a[2].cg_name != "D2_2"))
+	     rx_receive_sm_st = IDLE_D_st;	
+	end // case: RX_K_st
+	
+	RX_CB_st: begin
+	   if(cg_rx_struct_a[2].cg_type == DATA)
+	     rx_receive_sm_st = RX_CC_st;
+	   else
+	     rx_receive_sm_st = RX_INVALID_st;	     
+	end
 
-   print_sm_state({"RX RCV STATE : " , rx_receive_sm_st.name()});
+	RX_CC_st: begin
+	   if(cg_rx_struct_a[2].cg_type == DATA)
+	     rx_receive_sm_st = RX_CD_st;
+	   else
+	     rx_receive_sm_st = RX_INVALID_st;
+	end
 
-   if(rx_receive_sm_st == RECEIVE_st || rx_receive_sm_st == EPD2_CHECK_END_st)
-     print_check_end();
-   if(analysis_enable)
-     write_an();
+	RX_CD_st: begin
+	   if(cg_rx_struct_a[2].cg_name == "K28_5" && rx_even)
+	     rx_receive_sm_st = RX_K_st;	
+	   else if(cg_rx_struct_a[2].cg_name != "K28_5" || rx_even)	   
+	     rx_receive_sm_st = RX_INVALID_st;
+	end
+
+	IDLE_D_st: begin
+	   if(xmit == XMIT_DATA && carrier_detect()) begin	  
+	      rx_receive_sm_st = CARRIER_DETECT_st;
+	   end
+	   else if(xmit == XMIT_DATA && !carrier_detect() || 
+		   cg_rx_struct_a[2].cg_name == "K28_5")	   
+	     rx_receive_sm_st = RX_K_st;	
+	   else
+	     rx_receive_sm_st = RX_INVALID_st;
+	end // case: IDLE_D_st
+	
+	CARRIER_DETECT_st: begin
+           receiving = 1;
+	   if(cg_rx_struct_a[2].os_name == "/S/")
+             rx_receive_sm_st = START_OF_PACKET_st;
+           else 
+             rx_receive_sm_st = FALSE_CARRIER_st;
+	end
+
+	FALSE_CARRIER_st: begin
+	   if(cg_rx_struct_a[2].cg_name == "K28_5" && rx_even)	   
+	     rx_receive_sm_st = RX_K_st;
+	end
+
+	RX_INVALID_st: begin
+	   if(xmit == XMIT_CONFIG)
+	     rudi = RUDI_INVALID;
+	   else if(xmit == XMIT_DATA)
+	     receiving = 1;
+	   if(cg_rx_struct_a[2].cg_name == "K28_5" && rx_even)
+	     rx_receive_sm_st = RX_K_st;
+	   else
+	     if(cg_rx_struct_a[2].cg_name != "K28_5" && rx_even)
+	       rx_receive_sm_st = WAIT_FOR_K_st;
+	end // case: RX_INVALID_st
+	
+	START_OF_PACKET_st: begin
+	   rx_receive_sm_st = RECEIVE_st;
+	end
+
+	// RECEIVE_st doesn't wait for a new SUDI message. So it calls
+	// pcs_rx_rcv_sm() recursevely from the second case block
+	
+	RECEIVE_st: begin
+
+	   if(
+	      // decoder.check_end('{"K28_5" , "/D/"  , "K28_5"})
+	      (cg_rx_struct_a[2].cg_name == "K28_5" &&
+	       cg_rx_struct_a[1].os_name == "/D/" &&
+	       cg_rx_struct_a[0].cg_name == "K28_5")
+	      ||
+	      (cg_rx_struct_a[2].cg_name == "K28_5" &&
+	       cg_rx_struct_a[1].cg_name == "D21_1" &&
+	       cg_rx_struct_a[0].cg_name == "D0_0")	   
+	      ||
+	      (cg_rx_struct_a[2].cg_name == "K28_5" &&
+	       cg_rx_struct_a[1].cg_name == "D2_2" &&
+	       cg_rx_struct_a[0].cg_name == "D0_0")	   
+	      &&   
+	      rx_even)	   
+	     rx_receive_sm_st = EARLY_END_st;
+
+	   else if(cg_rx_struct_a[2].cg_name == "K29_7" &&
+		   cg_rx_struct_a[1].cg_name == "K23_7" &&
+		   cg_rx_struct_a[0].cg_name == "K28_5" &&
+		   rx_even)
+	     rx_receive_sm_st = TRI_RRI_st;
+	   
+	   //decoder.check_end('{"/T/" , "/R/" , "/R/"})
+	   else if(cg_rx_struct_a[2].os_name == "/T/" &&
+		   cg_rx_struct_a[1].os_name == "/R/" &&
+		   cg_rx_struct_a[0].os_name == "/R/")
+	     rx_receive_sm_st = TRR_EXTEND_st;
+
+	   //decoder.check_end('{"/R/" , "/R/" , "/R/"})
+	   else if(cg_rx_struct_a[2].os_name == "/R/" &&
+		   cg_rx_struct_a[1].os_name == "/R/" &&
+		   cg_rx_struct_a[0].os_name == "/R/")
+	     rx_receive_sm_st = EARLY_END_EXT_st;
+
+	   else if(cg_rx_struct_a[2].cg_type == DATA)
+	     rx_receive_sm_st = RX_DATA_st;
+	   else
+	     rx_receive_sm_st = RX_DATA_ERROR_st;
+
+	end // case: RECEIVE_st
+
+	EARLY_END_st: begin
+
+	   if(cg_rx_struct_a[2].cg_name == "D21_1" &&
+	      cg_rx_struct_a[1].cg_name == "D2_2")	   
+	     rx_receive_sm_st = RX_CB_st;
+	   else
+	     rx_receive_sm_st = IDLE_D_st;	
+	end
+	
+	TRI_RRI_st: begin
+	   if(cg_rx_struct_a[2].cg_name == "K28_5")
+	     rx_receive_sm_st = SEND1_AP_st;
+	end
+	
+	TRR_EXTEND_st: begin
+	   rx_receive_sm_st = EPD2_CHECK_END_st;
+	end
+	
+	EARLY_END_EXT_st: begin
+	   rx_receive_sm_st = EPD2_CHECK_END_st;
+	end
+	
+	RX_DATA_st: begin
+	   rx_receive_sm_st = RECEIVE_st;
+	end
+	
+	RX_DATA_ERROR_st: begin
+	   rx_receive_sm_st = RECEIVE_st;
+	end
+
+	PACKET_BURST_RPS_st: begin
+	   if(cg_rx_struct_a[2].os_name == "/S/")
+	     rx_receive_sm_st = SEND2_AP_st;
+	end
+
+	EXTEND_ERR_st: begin
+	   if(cg_rx_struct_a[2].os_name == "/S/")
+	     rx_receive_sm_st = SEND2_AP_st;
+	   else if(cg_rx_struct_a[2].cg_name == "K28_5" && rx_even)
+	     rx_receive_sm_st = SEND1_AP_st;
+	   else
+	     rx_receive_sm_st = EPD2_CHECK_END_st;
+	end	      
+	
+	EPD2_CHECK_END_st: begin
+	   if(cg_rx_struct_a[2].os_name == "/R/" &&
+	      cg_rx_struct_a[1].os_name == "/R/" &&
+	      cg_rx_struct_a[0].os_name == "/R/")
+	     rx_receive_sm_st = TRR_EXTEND_st;
+
+	   else if(cg_rx_struct_a[2].os_name == "/R/" &&
+		   cg_rx_struct_a[1].os_name == "/R/" &&
+		   cg_rx_struct_a[0].cg_name == "K28_5" &&
+		   rx_even)
+	     rx_receive_sm_st = TRI_RRI_st;
+
+	   else if(cg_rx_struct_a[2].os_name == "/R/" &&
+		   cg_rx_struct_a[1].os_name == "/R/" &&
+		   cg_rx_struct_a[0].os_name == "/S/")
+	     rx_receive_sm_st = PACKET_BURST_RPS_st;
+	   else
+	     rx_receive_sm_st = EXTEND_ERR_st;
+	   
+	end // case: EPD2_CHECK_END_st
+
+	SEND1_AP_st: begin
+	   rx_receive_sm_st = RX_K_st;	   
+	end
+
+	SEND2_AP_st: begin
+	   rx_receive_sm_st = START_OF_PACKET_st;
+	end
+	
+	default:
+	  `uvm_fatal(get_type_name(), $sformatf("The state %0s is INVALID for pcs_rx_rcv_sm" , rx_receive_sm_st))
+	
+      endcase // case (rx_receive_sm_st)
+   end // else: !if(!sync_status)
+   
+   mid_pcs_rx_rcv_sm();
    
    //----------------------------------------------
    // Second case is used to execute actions in NEW state
@@ -639,18 +631,18 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      
      RX_K_st: begin
 	receiving = 0;	
-     end // case: RX_K_st
+     end
      
      RX_CB_st: begin
 	receiving = 0;
      end
 
      RX_CC_st: begin
-	rx_config_reg[7:0] = cg_struct_current.octet;
+	rx_config_reg[7:0] = cg_rx_struct_a[2].octet;
      end
 
      RX_CD_st: begin
-	rx_config_reg[15:8] = cg_struct_current.octet;
+	rx_config_reg[15:8] = cg_rx_struct_a[2].octet;
 	rudi = RUDI_CONFIG;
      end
 
@@ -662,6 +654,7 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
      CARRIER_DETECT_st: begin
         receiving = 1;
 	pcs_rx_rcv_sm();
+	return;
      end
 
      RX_INVALID_st: begin
@@ -671,60 +664,108 @@ function void pcs_rx_comp::pcs_rx_rcv_sm();
 	  receiving = 1;
      end // case: RX_INVALID_st     
      
+     START_OF_PACKET_st: begin
+	rx_seq_item_h = pcs_seq_item::type_id::create("pcs_seq_item");
+	carrier_extend_cntr = 0;
+	carrier_extend_err_cntr = 0;
+     end
+
+     RX_DATA_st: begin
+	rx_frame_q.push_back(cg_rx_struct_a[2].octet);
+     end
+
+     RX_DATA_ERROR_st: begin
+	if(rx_seq_item_h.err == 0) begin
+	   rx_seq_item_h.err = 1;
+	   rx_seq_item_h.err_position = rx_frame_q.size();
+	   rx_seq_item_h.err_duration = 1;
+	end
+	rx_frame_q.push_back(cg_rx_struct_a[2].octet);
+	++rx_seq_item_h.err_duration;	
+     end
+     
      RECEIVE_st: begin
 	pcs_rx_rcv_sm();
+	return;
      end // case: RECEIVE_st
      
      TRI_RRI_st: begin
 	receiving = 1;
+	++carrier_extend_cntr;
      end
      
      EPD2_CHECK_END_st: begin
 	pcs_rx_rcv_sm();
+	return;
      end // case: EPD2_CHECK_END_st
+
+     TRR_EXTEND_st: begin
+	++carrier_extend_cntr;
+     end
+
+     EARLY_END_EXT_st: begin
+	++carrier_extend_cntr;
+     end
+
+     EXTEND_ERR_st: begin
+	++carrier_extend_cntr;
+	++carrier_extend_err_cntr;
+     end
+     
+     SEND1_AP_st: begin
+	rx_seq_item_ready();
+     	pcs_rx_rcv_sm();
+     	return;
+     end
+
+     SEND2_AP_st: begin
+	rx_seq_item_ready();
+	pcs_rx_rcv_sm();
+	return;
+     end     
      
    endcase // case (rx_receive_sm_st)
    
+   end_pcs_rx_rcv_sm();
+   
 endfunction // pcs_rx_rcv_sm
 
-function void pcs_rx_comp::write_an();
+function void pcs_rx_comp::rx_seq_item_ready();
+
+   int diff_calc;
    
-   if(rx_receive_sm_st == START_OF_PACKET_st) begin
-      pcs_seq_item_h = pcs_seq_item::type_id::create("pcs_seq_item", this);
+   // If packet size is less than 512 byte make
+   // sure that length of carrier extension was
+   // properly generated
+
+   // Possibl values for diff_calc:
+   // 0: When TX SM: END_OF_PACKET_EXT_st -> CARRIER_EXTEND_st -> KILL2_REQ_st (Packet Burst in Half Duplex)
+   // 2: When TX SM: END_OF_PACKET_EXT_st -> EXTEND_BY_1_st -> EPD2_NOEXT_st -> KILL1_REQ_st
+   // 3: When TX SM: END_OF_PACKET_EXT_st -> EXTEND_BY_1_st -> EPD2_NOEXT_st -> EPD3_st -> KILL1_REQ_st
+   
+   if(op_mode == HALF_DUPLEX_m) begin
+      if(rx_frame_q.size() < 512) begin
+	 diff_calc = rx_frame_q.size() + carrier_extend_cntr - 512;
+	 if(!(diff_calc inside {0,2,3}))
+	   `uvm_error("PCS_RX_COMP" , $sformatf("Carreier extension wasn't properly generated. \n frame_size : %0d \n carrier_extend_duration : %0d", rx_frame_q.size() , carrier_extend_cntr))
+      end
    end
-   if(rx_receive_sm_st == RX_DATA_st) begin
-      pcs_seq_item_h.rx_frame_q.push_back(cg_struct_a[2].octet);
+   
+   // Copy frame data into seq_item
+   rx_seq_item_h.frame_size = rx_frame_q.size();
+   rx_seq_item_h.frame_a = new[rx_seq_item_h.frame_size];
+   foreach(rx_frame_q[i])
+     rx_seq_item_h.frame_a[i] = rx_frame_q[i];
+   rx_frame_q.delete();
+   // Copy before send
+   $cast(clone_h, rx_seq_item_h.clone());
+   clone_h.print("RX PACKET");
+   if(analysis_enable) begin
+      `uvm_info("PCS_RX_COMP" , "Wrinting into AP", UVM_FULL)
+      ap_h.write(clone_h);
    end
-
-   // Check that frame was received without errors
-   if(pcs_seq_item_h != null &&					 
-      !pcs_seq_item_h.rx_err &&
-      (rx_receive_sm_st == RX_DATA_ERROR_st ||
-       rx_receive_sm_st == EARLY_END_EXT_st ||
-       rx_receive_sm_st == TRR_EXTEND_st ||
-       rx_receive_sm_st == EARLY_END_EXT_st))
-     pcs_seq_item_h.rx_err = 1;
-   
-   // Write packet into AP
-   if(pcs_seq_item_h != null &&
-      (rx_receive_sm_st == EARLY_END_EXT_st ||
-       rx_receive_sm_st == TRI_RRI_st ||
-       rx_receive_sm_st == TRR_EXTEND_st ||
-       rx_receive_sm_st == EARLY_END_EXT_st)) 
-     begin
-	pcs_seq_item_h.rx_print();
-	analysis_port.write(pcs_seq_item_h);
-     end      
-
-endfunction // write_an
-
-function void pcs_rx_comp::print_sm_state(string state_s);
-
-   print_struct_t print_struct;
-   print_struct.header_s = state_s;   
-   msg_print_h.print(print_struct);
-   
-endfunction // print_sm_state
+   ->rx_seq_item_ready_e;
+endfunction // rx_seq_item_ready
 
 // 36.2.4.6 Checking the validity of received code-groups
 function cg_struct_t pcs_rx_comp::decode_8b10b(cg_t cg , crd_t CRD, bit comma);
@@ -738,19 +779,18 @@ function cg_struct_t pcs_rx_comp::decode_8b10b(cg_t cg , crd_t CRD, bit comma);
    if(data_decode_8b10b_table_aa[CRD].exists(cg)) begin
       cg_struct.cg_type = DATA;
       cg_struct.octet = data_decode_8b10b_table_aa[CRD][cg];
-      cg_struct.cg_name = $sformatf("D%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
    end
    else if(spec_decode_8b10b_table_aa[CRD].exists(cg)) begin
       cg_struct.cg_type = SPECIAL;
       cg_struct.octet = spec_decode_8b10b_table_aa[CRD][cg];
-      cg_struct.cg_name = $sformatf("K%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);      
    end
    else begin 
       cg_struct.cg_type = INVALID;
-      cg_struct.cg_name = "INVALID";
    end  
 
-   pcs_common_methods_h.get_os(cg_struct);
+   pcs_common_methods_h.set_os(cg_struct);
+   pcs_common_methods_h.set_cg_name(cg_struct);
+   
    //`uvm_info("PCS_RX_COMP" , $sformatf("DATA VAL: %8b %0s" , cg_struct.octet , cg_struct.cg_name) , UVM_FULL)
    cg_struct.comma = comma;
    
@@ -774,8 +814,8 @@ function bit pcs_rx_comp::carrier_detect();
    cg_t compare_vec_pos, compare_vec_neg;
    int diff_neg , diff_pos;
    
-   compare_vec_neg = cg_struct_current.cg ^ cg_K28_5_neg;
-   compare_vec_pos = cg_struct_current.cg ^ cg_K28_5_pos;
+   compare_vec_neg = cg_rx_struct_a[2].cg ^ cg_K28_5_neg;
+   compare_vec_pos = cg_rx_struct_a[2].cg ^ cg_K28_5_pos;
 
    diff_neg = $countones(compare_vec_neg);
    diff_pos = $countones(compare_vec_pos);
@@ -795,46 +835,6 @@ function bit pcs_rx_comp::carrier_detect();
    end
    
 endfunction // carrier_detect
-
-function void pcs_rx_comp::print_cg(ref cg_struct_t cg_struct = cg_struct_current);
-   print_struct_t print_struct;   
-   footer_struct_t footer_struct;
-   string cg_name = "";
-   string os_name = "";
-   
-   print_struct.header_s = "RX CODE GROUP";
-   
-   //footer_struct.footer_name_s = "CRD_RX";
-   //footer_struct.footer_val_s = CRD_RX.name();
-   //print_struct.footer_q.push_back(footer_struct);
-
-   footer_struct.footer_name_s = "bin_val";
-   footer_struct.footer_val_s = $sformatf("10'b%6b_%4b" , cg_struct.cg[0:5] , cg_struct.cg[6:9]);
-   print_struct.footer_q.push_back(footer_struct);
-
-   footer_struct.footer_name_s = "octet_val";
-   footer_struct.footer_val_s = $sformatf("8'h%2h", cg_struct.octet);
-   print_struct.footer_q.push_back(footer_struct);
-
-   footer_struct.footer_name_s = "cg_type";
-   footer_struct.footer_val_s = cg_struct.cg_type.name();   
-   print_struct.footer_q.push_back(footer_struct);
-
-   footer_struct.footer_name_s = "cg_name";
-   footer_struct.footer_val_s = cg_struct.cg_name;
-   print_struct.footer_q.push_back(footer_struct);
-
-   footer_struct.footer_name_s = "os_name";      
-   footer_struct.footer_val_s = $sformatf("%0s" , cg_struct.os_name);      
-   print_struct.footer_q.push_back(footer_struct);
-   
-   footer_struct.footer_name_s = "is_comma";
-   footer_struct.footer_val_s = $sformatf("%0d" , cg_struct.comma);
-   print_struct.footer_q.push_back(footer_struct);
-
-   msg_print_h.print(print_struct);   
-   
-endfunction // print_cg
 
 function void pcs_rx_comp::print_pcs_rx_sync_vars();
    print_struct_t print_struct;   
@@ -859,46 +859,71 @@ function void pcs_rx_comp::print_pcs_rx_sync_vars();
 endfunction // print_pcs_rx_sync_vars
 
 function void pcs_rx_comp::os_set();
-   if(cg_struct_current.os_name == "") begin
-      cg_struct_a[2].os_name = "INVALID";
-      if(cg_struct_a[2].cg_type == SPECIAL) begin
-	 case(cg_struct_a[2].octet)
-	   8'hF7: cg_struct_a[2].os_name = "/R/";
-	   8'hFB: cg_struct_a[2].os_name = "/S/";
-	   8'hFD: cg_struct_a[2].os_name = "/T/";
-	   8'hFE: cg_struct_a[2].os_name = "/V/";
+   if(cg_rx_struct_a[2].os_name == "") begin
+      cg_rx_struct_a[2].os_name = "INVALID";
+      if(cg_rx_struct_a[2].cg_type == SPECIAL) begin
+	 case(cg_rx_struct_a[2].octet)
+	   8'hF7: cg_rx_struct_a[2].os_name = "/R/";
+	   8'hFB: cg_rx_struct_a[2].os_name = "/S/";
+	   8'hFD: cg_rx_struct_a[2].os_name = "/T/";
+	   8'hFE: cg_rx_struct_a[2].os_name = "/V/";
 	   8'hBC: begin
-	      if(cg_struct_a[1].cg_type == SPECIAL) begin
-		 case(cg_struct_a[1].octet)
+	      if(cg_rx_struct_a[1].cg_type == SPECIAL) begin
+		 case(cg_rx_struct_a[1].octet)
 		   8'hB5: begin
-		      cg_struct_a[2].os_name = "/C1/";
-		      cg_struct_a[1].os_name = "/C1/";
+		      cg_rx_struct_a[2].os_name = "/C1/";
+		      cg_rx_struct_a[1].os_name = "/C1/";
 		   end
 		   8'h42: begin
-		      cg_struct_a[2].os_name = "/C2/";
-		      cg_struct_a[1].os_name = "/C2/";
+		      cg_rx_struct_a[2].os_name = "/C2/";
+		      cg_rx_struct_a[1].os_name = "/C2/";
 		   end
-		 endcase // case (cg_struct_a[1].octet)
-	      end // if (cg_struct_a[1].cg_type == SPECIAL)
-	      else if(cg_struct_a[1].cg_type == DATA) begin
-		 case(cg_struct_a[1].octet)	      
+		 endcase // case (cg_rx_struct_a[1].octet)
+	      end // if (cg_rx_struct_a[1].cg_type == SPECIAL)
+	      else if(cg_rx_struct_a[1].cg_type == DATA) begin
+		 case(cg_rx_struct_a[1].octet)	      
 		   8'hC5: begin
-		      cg_struct_a[2].os_name = "/I1/";
-		      cg_struct_a[1].os_name = "/I1/";
+		      cg_rx_struct_a[2].os_name = "/I1/";
+		      cg_rx_struct_a[1].os_name = "/I1/";
 		   end
 		   8'h50: begin
-		      cg_struct_a[2].os_name = "/I2/";
-		      cg_struct_a[1].os_name = "/I2/";
+		      cg_rx_struct_a[2].os_name = "/I2/";
+		      cg_rx_struct_a[1].os_name = "/I2/";
 		   end
-		 endcase // case (cg_struct_a[1].octet)		 
-	      end // if (cg_struct_a[1].cg_type == DATA)	      
+		 endcase // case (cg_rx_struct_a[1].octet)		 
+	      end // if (cg_rx_struct_a[1].cg_type == DATA)	      
 	   end // case: 8'hBC	   
-	 endcase // case (cg_struct_a[2].octet)
+	 endcase // case (cg_rx_struct_a[2].octet)
       end
-      else if(cg_struct_a[2].cg_type == DATA)
-	cg_struct_a[2].os_name = "/D/";
+      else if(cg_rx_struct_a[2].cg_type == DATA)
+	cg_rx_struct_a[2].os_name = "/D/";
    end     
 endfunction // os_set
+
+function void pcs_rx_comp::mid_pcs_rx_rcv_sm();
+
+   // Print current state
+   pcs_common_methods_h.print_header({"RX RCV SM STATE : " , rx_receive_sm_st.name()});
+
+   // Print code-groups for check-end function
+   if(rx_receive_sm_st == RECEIVE_st || rx_receive_sm_st == EPD2_CHECK_END_st)
+     print_check_end();
+   
+endfunction // mid_pcs_rx_rcv_sm
+
+function void pcs_rx_comp::end_pcs_rx_rcv_sm();
+endfunction // end_pcs_rx_rcv_sm
+
+function void pcs_rx_comp::end_pcs_rx_sync_sm();
+   print_pcs_rx_sync_vars();
+endfunction // end_pcs_rx_sync_sm
+
+function void pcs_rx_comp::mid_pcs_rx_sync_sm();
+   pcs_common_methods_h.print_header({"RX SYNC SM STATE : " , rx_sync_sm_st.name()});
+endfunction // mid_pcs_rx_sync_sm
+
+function void pcs_rx_comp::rx_sm_completion();
+endfunction // rx_sm_completion
 
 function void pcs_rx_comp::print_check_end();
    print_struct_t print_struct;   
@@ -907,14 +932,13 @@ function void pcs_rx_comp::print_check_end();
    print_struct.header_s = "CHECK END";
 
    footer_struct.footer_name_s = "code_groups";
-   footer_struct.footer_val_s = $sformatf("%0s - %0s - %0s" , cg_struct_a[2].cg_name , cg_struct_a[1].cg_name, cg_struct_a[0].cg_name);
+   footer_struct.footer_val_s = $sformatf("%0s - %0s - %0s" , cg_rx_struct_a[2].cg_name , cg_rx_struct_a[1].cg_name, cg_rx_struct_a[0].cg_name);
    print_struct.footer_q.push_back(footer_struct);
 
    footer_struct.footer_name_s = "ordered_set";
-   footer_struct.footer_val_s = $sformatf("%0s - %0s - %0s" , cg_struct_a[2].os_name , cg_struct_a[1].os_name, cg_struct_a[0].os_name);
+   footer_struct.footer_val_s = $sformatf("%0s - %0s - %0s" , cg_rx_struct_a[2].os_name , cg_rx_struct_a[1].os_name, cg_rx_struct_a[0].os_name);
    print_struct.footer_q.push_back(footer_struct);
 
    msg_print_h.print(print_struct);
 
 endfunction // print_check_end
-
