@@ -18,6 +18,8 @@ class pcs_common_methods extends uvm_object;
    // Class properties
    // ***************************************************************
 
+   message_print msg_print_h;
+   
    // ***************************************************************
    // Constraints 
    // ***************************************************************
@@ -25,19 +27,24 @@ class pcs_common_methods extends uvm_object;
    // ***************************************************************
    // Class methods
    // ***************************************************************
-   
-   function new(string name="pcs_common_methods");
-      super.new(name);
-   endfunction // new
 
+   extern function new(string name="pcs_common_methods");
    // 36.2.4.4 Running disparity rules
    extern function void crd_rules(cg_t cg, ref crd_t crd);
 
-   extern function bit os_to_octet(string os, ref octet_t octet);
+   extern function octet_t os_to_octet(os_t os);
    extern function bit cg_name_to_octet(string cg_name, ref octet_t octet);
-   extern function void get_os(ref cg_struct_t cg_struct);
-   
+   extern function void set_os(ref cg_struct_t cg_struct);
+   extern function void set_cg_name(ref cg_struct_t cg_struct);
+      
+   extern function void print_header(string header);
+   extern function void print_cg(string header, ref cg_struct_t cg_struct);
 endclass // pcs_common_methods
+   
+function pcs_common_methods::new(string name="pcs_common_methods");
+   super.new(name);
+   msg_print_h = message_print::type_id::create("msg_print");
+endfunction // new
 
 function bit pcs_common_methods::cg_name_to_octet(string cg_name, ref octet_t octet);
    bit cg_match = 1;
@@ -55,19 +62,18 @@ function bit pcs_common_methods::cg_name_to_octet(string cg_name, ref octet_t oc
    return cg_match;
 endfunction // cg_name_to_octet
 
-function bit  pcs_common_methods::os_to_octet(string os, ref octet_t octet);
-   bit os_match = 1;
+function octet_t pcs_common_methods::os_to_octet(os_t os);
+   octet_t octet;
    case(os)
-     "/R/": octet = 8'hF7;
-     "/S/": octet = 8'hFB;
-     "/T/": octet = 8'hFD;
-     "/V/": octet = 8'hFE;
-     default: os_match = 0;
+     CARRIER_EXT_os	: octet = 8'hF7;
+     SOP_os		: octet = 8'hFB;
+     EOP_os		: octet = 8'hFD;
+     ERR_PROP_os	: octet = 8'hFE;
    endcase // case (os_name)
-   return os_match;
+   return octet;
 endfunction // os_to_octet
 
-function void pcs_common_methods::get_os(ref cg_struct_t cg_struct);
+function void pcs_common_methods::set_os(ref cg_struct_t cg_struct);
    if(cg_struct.cg_type == SPECIAL) begin
       case(cg_struct.octet)
 	8'hF7: cg_struct.os_name = "/R/";
@@ -78,8 +84,16 @@ function void pcs_common_methods::get_os(ref cg_struct_t cg_struct);
    end
    else if(cg_struct.cg_type == DATA)
      cg_struct.os_name = "/D/";
-endfunction // get_os     
-  
+endfunction // set_os
+
+function void pcs_common_methods::set_cg_name(ref cg_struct_t cg_struct);
+   case(cg_struct.cg_type)
+     SPECIAL: cg_struct.cg_name = $sformatf("K%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
+     DATA   : cg_struct.cg_name = $sformatf("D%0d_%0d" , cg_struct.octet[4:0] , cg_struct.octet[7:5]);
+     default: cg_struct.cg_name = "INVALID";
+   endcase // case (cg_struct.cg_type)
+endfunction // set_cg_name
+
 // 36.2.4.4 Running disparity rules
 function void pcs_common_methods::crd_rules( cg_t cg, ref crd_t crd);
    
@@ -101,3 +115,47 @@ function void pcs_common_methods::crd_rules( cg_t cg, ref crd_t crd);
      crd = NEGATIVE;
    
 endfunction // crd_rx_rules
+
+function void pcs_common_methods::print_header(string header);
+
+   print_struct_t print_struct;
+   print_struct.header_s = header;   
+   msg_print_h.print(print_struct);
+   
+endfunction // print_header
+
+function void pcs_common_methods::print_cg(string header, ref cg_struct_t cg_struct);
+   print_struct_t print_struct;   
+   footer_struct_t footer_struct;
+   string cg_name = "";
+   string os_name = "";
+   
+   print_struct.header_s = header;
+   
+   footer_struct.footer_name_s = "bin_val";
+   footer_struct.footer_val_s = $sformatf("10'b%6b_%4b" , cg_struct.cg[0:5] , cg_struct.cg[6:9]);
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "octet_val";
+   footer_struct.footer_val_s = $sformatf("8'h%2h", cg_struct.octet);
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "cg_type";
+   footer_struct.footer_val_s = cg_struct.cg_type.name();   
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "cg_name";
+   footer_struct.footer_val_s = cg_struct.cg_name;
+   print_struct.footer_q.push_back(footer_struct);
+
+   footer_struct.footer_name_s = "os_name";      
+   footer_struct.footer_val_s = $sformatf("%0s" , cg_struct.os_name);      
+   print_struct.footer_q.push_back(footer_struct);
+   
+   footer_struct.footer_name_s = "is_comma";
+   footer_struct.footer_val_s = $sformatf("%0d" , cg_struct.comma);
+   print_struct.footer_q.push_back(footer_struct);
+
+   msg_print_h.print(print_struct);   
+   
+endfunction // print_cg
